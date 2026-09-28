@@ -192,6 +192,16 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 index=0,
             )
         with c2:
+            strategy_style = st.selectbox(
+                "Estilo Operacional Desejado:",
+                [
+                    "🌟 Todas as Estratégias",
+                    "🟢 Comprar na Baixa / Queda (Reversão IFR2)",
+                    "🚀 Comprar na Força / Rompimento (Momentum)",
+                    "💰 Captura de Proventos (Pré-Data COM)",
+                ],
+                index=0,
+            )
             only_high = st.checkbox("Apenas Alta Convicção (Score >= 8.0 & R/R >= 2.2)", value=False)
             if not only_high:
                 min_score = st.slider("Nota de Confluência Mínima:", min_value=6.0, max_value=9.5, value=7.0, step=0.5)
@@ -241,6 +251,13 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 st.session_state["last_category"] = category_code
 
         results = st.session_state.get("cached_scan", [])
+        if "Comprar na Baixa" in strategy_style:
+            results = [r for r in results if r["strategy"] == "IFR2"]
+        elif "Comprar na Força" in strategy_style:
+            results = [r for r in results if r["strategy"] == "TREND"]
+        elif "Captura de Proventos" in strategy_style:
+            results = [r for r in results if r["strategy"] == "DIVIDEND_COM"]
+
         if results:
             st.success(f"Encontradas {len(results)} oportunidades com setup ativo.")
 
