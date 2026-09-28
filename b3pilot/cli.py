@@ -14,6 +14,8 @@ from b3pilot.ledger.db import init_db, get_db_session
 from b3pilot.ledger.portfolio import execute_buy, execute_sell, get_portfolio_summary
 from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
+from b3pilot.core.regime import analyze_market_regime
+from b3pilot.core.risk import audit_option_spread
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe
 from b3pilot.alerts.morning_job import run_morning_routine
@@ -78,11 +80,27 @@ def status():
 
 @app.command()
 def scan(
-    all_tickers: bool = typer.Option(True, "--all/--top", help="Escanear universo completo (~74 ações) ou apenas Top 20"),
+    all_tickers: bool = typer.Option(True, "--all/--top", help="Escanear universo completo (~100 ações) ou apenas Top 20"),
     high_conviction: bool = typer.Option(False, "--high/--all-setups", help="Filtrar apenas Compras Muito Vantajosas (Score >= 8.0 & R/R >= 2.2)"),
     min_score: float = typer.Option(7.0, "--min-score", "-m", help="Score mínimo de confluência (6.0 a 10.0)"),
 ):
-    """Executa o scanner de mercado avaliando IFR2, Seguidor de Tendência e Proventos."""
+    """Executa o scanner de mercado com filtro de Regime Macro, ADTV e Position Sizing."""
+    regime = analyze_market_regime()
+    regime_color = "green" if regime["status"] == "BULL" else "yellow" if regime["status"] == "CORRECTION" else "red"
+    console.print(
+        Panel(
+            f"[bold {regime_color}]Regime do IBOVESPA: {regime['name']}[/bold {regime_color}]\n"
+            f"• Cotação: R$ {regime['ibov_close'] or 0:,.0f} ({regime['ibov_change_pct']:+.2f}%)\n"
+            f"• Diretriz Macro: {regime['description']}",
+            title="Gatekeeper de Mercado Institucional",
+            border_style=regime_color,
+        )
+    )
+
+    if regime["status"] == "PANIC":
+        console.print("[bold red]Operações suspensas pelo regime de pânico.[/bold red]")
+        return
+
     tickers = get_universe(top_only=not all_tickers)
     results = run_screener(tickers=tickers, min_score=min_score, high_conviction_only=high_conviction, show_progress=True)
 
@@ -96,11 +114,15 @@ def scan(
     table.add_column("Score", justify="center")
     table.add_column("Entrada Ref.", justify="right")
     table.add_column("Stop Loss", justify="right")
-    table.add_column("Take Profit", justify="right")
+    table.add_column("Alvo", justify="right")
     table.add_column("R/R", justify="center")
+    table.add_column("Lote Sug.", justify="right")
+    table.add_column("ADTV 21", justify="right")
     table.add_column("Justificativa Técnica")
 
     for r in results:
+        adtv_txt = f"R$ {r.get('adtv_milhoes', 0):.1f}M" if "adtv_milhoes" in r else "-"
+        shares_txt = f"{r.get('suggested_shares', '-')} ações" if "suggested_shares" in r else "-"
         table.add_row(
             r["ticker"],
             r["name"],
@@ -109,6 +131,8 @@ def scan(
             f"R$ {r['stop_loss']:.2f}",
             f"R$ {r['take_profit']:.2f}",
             f"{r.get('rr_ratio', 'N/A')}x",
+            shares_txt,
+            adtv_txt,
             r["reason"],
         )
 
@@ -273,6 +297,44 @@ def test_telegram():
         console.print("[bold green]✓ Notificação enviada com sucesso para o Telegram![/bold green]")
     else:
         console.print("[bold red]Falha ao enviar mensagem no Telegram. Verifique TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID no .env.[/bold red]")
+
+
+@app.command(name="audit-trava")
+def audit_trava_command(
+    ticker: str = typer.Argument("MCDC34", help="Ticker do ativo (ex: MCDC34 ou PETR4)"),
+    strike_alto: float = typer.Option(..., "--strike-alto", "-sa", help="Strike superior (K_high)"),
+    strike_baixo: float = typer.Option(..., "--strike-baixo", "-sb", help="Strike inferior (K_low)"),
+    premio: float = typer.Option(..., "--premio", "-p", help="Prêmio líquido por ação em R$"),
+    tipo: str = typer.Option("BEAR_PUT", "--tipo", "-t", help="Tipo: BEAR_PUT (Trava de Baixa c/ Put) ou BEAR_CALL (c/ Call)"),
+    qtd: int = typer.Option(100, "--qtd", "-q", help="Quantidade de opções (ex: 100)"),
+):
+    """Audita a assimetria risco/retorno de uma Trava de Baixa recomendada por banco/corretora."""
+    res = audit_option_spread(
+        underlying=ticker,
+        spread_type=tipo,
+        strike_long=strike_alto,
+        strike_short=strike_baixo,
+        net_premium=premio,
+        contracts_qty=qtd,
+    )
+
+    border_color = "red" if res["is_retail_trap"] else "green"
+    verdict_str = " | ".join(res["verdict_tags"])
+
+    panel_text = (
+        f"[bold cyan]{res['strategy_desc']}[/bold cyan]\n"
+        f"• Quantidade: {res['contracts_qty']} opções\n"
+        f"• Break-even (Preço de Equilíbrio): R$ {res['break_even']:.2f}\n"
+        f"• Ganho Máximo Total: [bold green]R$ {res['max_profit_total']:,.2f}[/bold green]\n"
+        f"• Perda Máxima Total: [bold red]R$ {res['max_loss_total']:,.2f}[/bold red]\n"
+        f"• Assimetria Risco x Retorno: [bold]{res['risk_reward_ratio']:.2f}x[/bold]\n"
+        f"• Taxa de Acerto Mínima Necessária: [bold]{res['required_win_rate_pct']:.1f}%[/bold]\n\n"
+        f"[bold {border_color}]{verdict_str}[/bold {border_color}]\n"
+        f"{res['recommendation']}\n\n"
+        f"[dim]{res['tax_warning']}[/dim]"
+    )
+
+    console.print(Panel(panel_text, title=f"Auditoria Quantitativa de Opções - {ticker}", border_style=border_color))
 
 
 if __name__ == "__main__":

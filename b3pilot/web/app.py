@@ -14,6 +14,8 @@ from b3pilot.ledger.portfolio import get_portfolio_summary, execute_buy, execute
 from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
 from b3pilot.core.strategies import compute_indicators
+from b3pilot.core.regime import analyze_market_regime
+from b3pilot.core.risk import audit_option_spread, calculate_position_size
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe, SMALL_MID_CAPS, BLUE_CHIPS
 from b3pilot.data.b3_feed import (
@@ -24,7 +26,7 @@ from b3pilot.data.b3_feed import (
     get_clean_ticker,
     get_base_ticker,
 )
-from b3pilot.config import TAX_EXEMPTION_LIMIT_MONTHLY
+from b3pilot.config import TAX_EXEMPTION_LIMIT_MONTHLY, DEFAULT_CAPITAL
 
 # Configuração da Página
 st.set_page_config(
@@ -99,6 +101,7 @@ menu = st.sidebar.radio(
     [
         "📊 Visão Geral da Carteira",
         "🎯 Radar de Oportunidades & Proventos",
+        "🛡️ Auditoria de Travas de Baixa & Opções",
         "📈 Análise Gráfica & Variações (1D a 10A)",
         "📚 Guia dos Setups & Estratégias",
         "📜 Histórico & Performance",
@@ -108,6 +111,25 @@ menu = st.sidebar.radio(
 )
 st.sidebar.markdown("---")
 st.sidebar.info("Modo: **Local / Antigravity agy**\n\nIsenção B3: **R$ 20.000,00/mês**")
+
+# Gatekeeper Macro IBOVESPA no Topo
+regime = analyze_market_regime()
+reg_col1, reg_col2 = st.columns([3, 1])
+with reg_col1:
+    if regime["status"] == "BULL":
+        st.markdown(f'<div class="badge-success" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:1px solid #10b981;">🟢 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+    elif regime["status"] == "CORRECTION":
+        st.markdown(f'<div class="badge-warning" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:1px solid #f59e0b;">🟡 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+    elif regime["status"] == "BEAR":
+        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:1px solid #ef4444;">🔴 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+    elif regime["status"] == "PANIC":
+        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:2px solid #b91c1c;">🚨 <b>PÂNICO NO IBOVESPA ({regime["ibov_change_pct"]}%)</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+    else:
+        st.caption(f"Status IBOVESPA: {regime['name']}")
+
+with reg_col2:
+    if regime.get("ibov_close"):
+        st.caption(f"IBOV: **R$ {regime['ibov_close']:,.0f}** ({regime['ibov_change_pct']:+.2f}%)")
 
 # ==========================================
 # 1. VISÃO GERAL DA CARTEIRA
@@ -226,7 +248,10 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
             table_rows = []
             for r in results:
                 info_link = f"[{r['ticker']} no StatusInvest]({r['info_url']})"
-                chart_link = f"[{r['ticker']} no TradingView]({r['chart_url']})"
+                shares_val = r.get("suggested_shares", 100)
+                cap_val = r.get("suggested_capital", shares_val * r["entry_price"])
+                adtv_val = f"R$ {r.get('adtv_milhoes', 0):.1f}M" if "adtv_milhoes" in r else "-"
+
                 table_rows.append({
                     "Código da Ação": r["ticker"],
                     "Setup (Estratégia)": r["name"],
@@ -235,6 +260,9 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                     "Stop Loss (R$)": f"R$ {r['stop_loss']:.2f}",
                     "Alvo de Lucro (R$)": f"R$ {r['take_profit']:.2f}",
                     "Relação R/R": f"{r.get('rr_ratio', 'N/A')}x",
+                    "Lote Sugerido (2% Risco)": f"{shares_val} ações",
+                    "Capital Alocado": f"R$ {cap_val:,.2f}",
+                    "ADTV 21": adtv_val,
                     "Análise Técnica Detalhada": r["reason"].replace("\n", " | "),
                     "Ficha Fundamentalista": info_link,
                 })
@@ -271,6 +299,121 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
             st.dataframe(df_divs, width="stretch")
         else:
             st.info("Nenhum anúncio recente com Data COM nos próximos 15 dias para os ativos monitorados.")
+
+# ==========================================
+# 2.5 AUDITORIA DE TRAVAS DE BAIXA & OPÇÕES
+# ==========================================
+elif menu == "🛡️ Auditoria de Travas de Baixa & Opções":
+    st.title("Auditoria de Travas de Baixa e Operações Estruturadas")
+    st.markdown(
+        "Avaliação matemática independente para **auditar recomendações de bancos e corretoras** "
+        "(como a Trava de Baixa sugerida hoje em **MCDC34**). Descubra se a assimetria real favorece o investidor ou a mesa do banco."
+    )
+
+    with st.expander("📌 Por que o seu banco está sugerindo Trava de Baixa em MCDC34 hoje?", expanded=True):
+        st.markdown(
+            """
+            * **Tese no Ativo (McDonald's / MCDC34):** Desaceleração de tráfego de clientes de média/baixa renda, guerras de preços de combos de US$ 5 e compressão de margens nos EUA, além de resistência gráfica após altas recentes.
+            * **O Conflito de Interesses do Banco:** Ao empurrar travas de opções pré-formatadas em "1 clique", a mesa do banco atua como contraparte de balcão. O banco embute uma margem generosa no spread entre compra e venda das opções e desova riscos que grandes clientes institucionais não querem carregar.
+            * **A Armadilha do Varejo:** A maioria dessas travas arrisca **100% de perda do capital investido** para um ganho máximo de apenas **30% a 50%**. Você arrisca R$ 1.000 para ganhar R$ 350. Além disso, **opções NÃO possuem a isenção fiscal de R$ 20.000/mês da Receita Federal** (15% de IR obrigatório).
+            """
+        )
+
+    st.subheader("Simulador e Auditor de Assimetria de Travas")
+    c_in1, c_in2, c_in3 = st.columns(3)
+
+    with c_in1:
+        op_ticker = st.text_input("Ativo-Objeto (ex: MCDC34, PETR4, VALE3):", value="MCDC34").strip().upper()
+        spread_choice = st.selectbox(
+            "Tipo de Estrutura:",
+            ["Trava de Baixa com PUT (Débito)", "Trava de Baixa com CALL (Crédito)"],
+            index=0,
+        )
+        type_code = "BEAR_PUT" if "PUT" in spread_choice else "BEAR_CALL"
+
+    with c_in2:
+        s_long = st.number_input("Strike Superior (K_high em R$):", value=54.00, step=0.50, format="%.2f")
+        s_short = st.number_input("Strike Inferior (K_low em R$):", value=50.00, step=0.50, format="%.2f")
+
+    with c_in3:
+        n_prem = st.number_input("Custo Líquido / Prêmio por Ação (R$):", value=1.40, min_value=0.01, step=0.05, format="%.2f")
+        n_contracts = st.number_input("Quantidade de Opções (Cotas):", value=100, min_value=10, step=100)
+
+    # Executa auditoria quantitativa
+    audit_res = audit_option_spread(
+        underlying=op_ticker,
+        spread_type=type_code,
+        strike_long=s_long,
+        strike_short=s_short,
+        net_premium=n_prem,
+        contracts_qty=int(n_contracts),
+    )
+
+    st.markdown("---")
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric("Relação Risco x Retorno", f"{audit_res['risk_reward_ratio']:.2f}x")
+    with m2:
+        st.metric("Ganho Máximo Possível", f"R$ {audit_res['max_profit_total']:,.2f}")
+    with m3:
+        st.metric("Perda Máxima Possível", f"R$ {audit_res['max_loss_total']:,.2f}")
+    with m4:
+        st.metric("Ponto de Equilíbrio (Break-Even)", f"R$ {audit_res['break_even']:.2f}")
+    with m5:
+        st.metric("Taxa de Acerto Necessária", f"{audit_res['required_win_rate_pct']:.1f}%")
+
+    if audit_res["is_retail_trap"]:
+        st.error(f"🚨 **DIAGNÓSTICO DO ARQUITETO:** {audit_res['recommendation']}")
+    else:
+        st.success(f"✓ **DIAGNÓSTICO DO ARQUITETO:** {audit_res['recommendation']}")
+
+    st.caption(audit_res["tax_warning"])
+
+    # Gráfico de Payoff Interativo no Vencimento
+    st.subheader(f"Curva de Payoff no Vencimento ({audit_res['strategy_desc']})")
+    
+    k_min = min(s_long, s_short)
+    k_max = max(s_long, s_short)
+    prices = [round(k_min * 0.85 + (i * (k_max * 1.15 - k_min * 0.85) / 100), 2) for i in range(101)]
+    payoffs = []
+
+    for p in prices:
+        if type_code == "BEAR_PUT":
+            # Compra put k_max, vende put k_min
+            val_put_long = max(0.0, k_max - p)
+            val_put_short = max(0.0, k_min - p)
+            pnl_per_share = (val_put_long - val_put_short) - n_prem
+        else:
+            # Vende call k_min, compra call k_max
+            val_call_short = max(0.0, p - k_min)
+            val_call_long = max(0.0, p - k_max)
+            pnl_per_share = n_prem - (val_call_short - val_call_long)
+        payoffs.append(round(pnl_per_share * n_contracts, 2))
+
+    df_payoff = pd.DataFrame({"Preco_Ativo": prices, "Resultado_RS": payoffs})
+
+    fig_payoff = go.Figure()
+    fig_payoff.add_trace(
+        go.Scatter(
+            x=df_payoff["Preco_Ativo"],
+            y=df_payoff["Resultado_RS"],
+            mode="lines",
+            name="Resultado Financeiro (R$)",
+            line=dict(color="#2563eb", width=3),
+        )
+    )
+    fig_payoff.add_hline(y=0, line_dash="dash", line_color="#64748b", annotation_text="Break-Even (Zero a Zero)")
+    fig_payoff.add_vline(x=audit_res["break_even"], line_dash="dot", line_color="#f59e0b", annotation_text=f"BE: R$ {audit_res['break_even']:.2f}")
+
+    fig_payoff.update_layout(
+        template="plotly_white",
+        title=f"Payoff no Vencimento para {op_ticker} ({int(n_contracts)} opções)",
+        xaxis_title="Cotação do Ativo-Objeto no Vencimento (R$)",
+        yaxis_title="Lucro / Prejuízo Líquido (R$)",
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig_payoff, width="stretch")
+
 
 # ==========================================
 # 3. ANÁLISE GRÁFICA & VARIAÇÕES (1D a 10A)
