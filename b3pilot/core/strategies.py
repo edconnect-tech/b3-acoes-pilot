@@ -51,7 +51,6 @@ def evaluate_ifr2_setup(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
 
     data = compute_indicators(df)
     last = data.iloc[-1]
-    prev = data.iloc[-2]
 
     close = float(last["Close"])
     sma200 = float(last["SMA_200"])
@@ -70,16 +69,29 @@ def evaluate_ifr2_setup(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             reward = target - close
             rr_ratio = round(reward / risk, 2) if risk > 0 else 1.0
 
+            pct_stop = round(((close - stop_loss) / close) * 100, 2)
+            pct_target = round(((target - close) / close) * 100, 2)
+            pct_sma200 = round(((close - sma200) / sma200) * 100, 2)
+            vol_ma = float(last["VOL_MA21"]) if pd.notna(last["VOL_MA21"]) else 1.0
+            vol_ratio = round(float(last["Volume"]) / vol_ma, 2) if vol_ma > 0 else 1.0
+
             # Score de Confluência (0 a 10)
-            # Mais sobrevendido = maior score; volume acima da média na queda = capitulação
             score = 7.0
             if rsi2 < 5.0:
                 score += 1.5
             elif rsi2 < 10.0:
                 score += 1.0
 
-            if last["Volume"] > last["VOL_MA21"]:
+            if vol_ratio > 1.2:
                 score += 1.0  # Volume de capitulação/exaustão
+
+            reason = (
+                f"🟢 Reversão à Média (IFR2):\n"
+                f"• IFR(2) em {rsi2:.1f} (Sobrevenda extrema em tendência de alta)\n"
+                f"• Tendência Primária: +{pct_sma200:.1f}% acima da SMA 200 (R$ {sma200:.2f})\n"
+                f"• Volume Recente: {vol_ratio:.1f}x da média de 21 pregões\n"
+                f"• Alvo: R$ {target:.2f} (+{pct_target:.1f}%) | Stop: R$ {stop_loss:.2f} (-{pct_stop:.1f}%)"
+            )
 
             return {
                 "strategy": "IFR2",
@@ -92,7 +104,7 @@ def evaluate_ifr2_setup(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 "rsi2": round(rsi2, 1),
                 "atr": round(atr, 2),
                 "score": min(round(score, 1), 10.0),
-                "reason": f"IFR(2) em {rsi2:.1f} (sobrevenda) com ativo acima da SMA 200 (R$ {sma200:.2f}). Alvo na máxima de 2 dias (R$ {target:.2f}).",
+                "reason": reason,
             }
 
     return None
@@ -134,12 +146,25 @@ def evaluate_trend_setup(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
             target = round(close + (risk * 2.5), 2)
             rr_ratio = round((target - close) / risk, 2)
 
+            pct_stop = round(((close - stop_loss) / close) * 100, 2)
+            pct_target = round(((target - close) / close) * 100, 2)
+            vol_ma = float(last["VOL_MA21"]) if pd.notna(last["VOL_MA21"]) else 1.0
+            vol_ratio = round(float(last["Volume"]) / vol_ma, 2) if vol_ma > 0 else 1.0
+
             # Score de Confluência
             score = 7.0
-            if last["Volume"] > last["VOL_MA21"] * 1.3:
+            if vol_ratio > 1.3:
                 score += 1.5  # Volume expressivo
             if (ema9 - ema21) / ema21 > 0.02:
                 score += 1.0  # Boa divergência das médias
+
+            reason = (
+                f"🚀 Seguidor de Tendência (Momentum):\n"
+                f"• Alinhamento Altista: Preço > EMA 9 > EMA 21 > SMA 200\n"
+                f"• Inclinação da Média Rápida: EMA 9 ascendente em R$ {ema9:.2f}\n"
+                f"• Volume Financeiro: {vol_ratio:.1f}x da média de 21 dias\n"
+                f"• Assimetria Projetada: Alvo 2.5R em R$ {target:.2f} (+{pct_target:.1f}%) | Stop em R$ {stop_loss:.2f} (-{pct_stop:.1f}%)"
+            )
 
             return {
                 "strategy": "TREND",
@@ -152,7 +177,7 @@ def evaluate_trend_setup(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
                 "rr_ratio": rr_ratio,
                 "atr": round(atr, 2),
                 "score": min(round(score, 1), 10.0),
-                "reason": f"Alinhamento altista (Preço > EMA9 > EMA21 > SMA200) com rompimento. Risco R$ {risk:.2f} com alvo 2.5R em R$ {target:.2f}.",
+                "reason": reason,
             }
 
     return None

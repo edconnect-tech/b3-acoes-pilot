@@ -55,6 +55,17 @@ def evaluate_dividend_setup(df: pd.DataFrame, ticker: str) -> Optional[Dict[str,
     if days_until_com <= 4:
         score += 0.5  # Janela de tempo de alta atratividade
 
+    pct_stop = round(((close - stop_loss) / close) * 100, 2)
+    pct_target = round(((target - close) / close) * 100, 2)
+
+    reason = (
+        f"💰 Captura de Proventos Pré-Data COM:\n"
+        f"• Data de Corte (Data COM): {div_info['data_com'].strftime('%d/%m/%Y')} (em {days_until_com} dias úteis)\n"
+        f"• Provento Estimado: R$ {div_info['estimated_value']:.2f}/ação ({projected_yield:.2f}% de Dividend Yield na rodada)\n"
+        f"• Filtro Técnico de Proteção: Ativo sustentado acima da SMA 50 (R$ {sma50:.2f})\n"
+        f"• Alvo Projetado: R$ {target:.2f} (+{pct_target:.1f}%) | Stop Loss: R$ {stop_loss:.2f} (-{pct_stop:.1f}%)"
+    )
+
     return {
         "strategy": "DIVIDEND_COM",
         "name": "Captura Pré-Data COM",
@@ -69,9 +80,5 @@ def evaluate_dividend_setup(df: pd.DataFrame, ticker: str) -> Optional[Dict[str,
         "days_until_com": days_until_com,
         "estimated_value": div_info["estimated_value"],
         "projected_yield_pct": round(projected_yield, 2),
-        "reason": (
-            f"Data COM em {div_info['data_com'].strftime('%d/%m/%Y')} (em {days_until_com} dias). "
-            f"Provento est.: R$ {div_info['estimated_value']:.2f} ({projected_yield:.2f}%). "
-            f"Ativo sustentado acima da SMA 50 (R$ {sma50:.2f})."
-        ),
+        "reason": reason,
     }
