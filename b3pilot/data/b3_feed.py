@@ -1,6 +1,9 @@
 """Módulo de download e cache de cotações diárias da B3 via yfinance."""
 
 import os
+import sys
+import logging
+import contextlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
@@ -8,6 +11,9 @@ import pandas as pd
 import yfinance as yf
 
 from b3pilot.config import PROJECT_ROOT
+
+# Silencia mensagens de erro/aviso ruidosas da biblioteca yfinance
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 CACHE_DIR = PROJECT_ROOT / ".cache_data"
 CACHE_DIR.mkdir(exist_ok=True)
@@ -52,15 +58,17 @@ def fetch_ticker_data(
                 pass
 
     try:
-        data = yf.download(
-            clean_ticker,
-            period=period,
-            interval=interval,
-            progress=False,
-            auto_adjust=True,
-        )
+        # Suprime prints ruidosos de 404/delisted do yfinance no stderr
+        with open(os.devnull, "w") as devnull, contextlib.redirect_stderr(devnull):
+            data = yf.download(
+                clean_ticker,
+                period=period,
+                interval=interval,
+                progress=False,
+                auto_adjust=True,
+            )
 
-        if data.empty or len(data) < 20:
+        if data is None or data.empty or len(data) < 20:
             return None
 
         # Corrige colunas se vierem com MultiIndex do yfinance
@@ -80,8 +88,7 @@ def fetch_ticker_data(
             pass
 
         return data
-    except Exception as e:
-        print(f"Erro ao baixar {clean_ticker}: {e}")
+    except Exception:
         return None
 
 

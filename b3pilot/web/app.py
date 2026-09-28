@@ -116,7 +116,7 @@ if menu == "📊 Visão Geral da Carteira":
             "Valor Mercado", "PnL (R$)", "PnL (%)",
             "Stop Loss", "Take Profit", "Trailing Stop", "Estratégia", "Data Entrada"
         ]
-        st.dataframe(df_pos, use_container_width=True)
+        st.dataframe(df_pos, width="stretch")
     else:
         st.info("Nenhuma ação em custódia no momento. Use o menu 'Registrar Ordem' para cadastrar sua primeira compra.")
 
@@ -147,7 +147,7 @@ elif menu == "🎯 Radar & Proventos (Data COM)":
                 "ticker", "name", "score", "entry_price", "stop_loss", "take_profit", "rr_ratio", "reason"
             ]]
             df_scan.columns = ["Ticker", "Setup", "Score", "Entrada Ref.", "Stop Loss", "Take Profit", "R/R", "Justificativa Técnica"]
-            st.dataframe(df_scan, use_container_width=True)
+            st.dataframe(df_scan, width="stretch")
         else:
             st.info("Nenhuma oportunidade atende aos critérios restritivos no momento.")
 
@@ -166,7 +166,7 @@ elif menu == "🎯 Radar & Proventos (Data COM)":
                 "ticker", "data_com", "data_ex", "days_until_com", "estimated_value", "current_price", "projected_yield_pct"
             ]]
             df_divs.columns = ["Ticker", "Data COM", "Data EX", "Dias até COM", "Provento Est. (R$)", "Cotação Atual", "Yield Estimado (%)"]
-            st.dataframe(df_divs, use_container_width=True)
+            st.dataframe(df_divs, width="stretch")
         else:
             st.info("Nenhum anúncio recente com Data COM nos próximos 15 dias para os ativos monitorados.")
 
@@ -231,10 +231,10 @@ elif menu == "📜 Histórico & Performance":
                 markers=True,
             )
             fig.update_layout(template="plotly_white", xaxis_title="Data", yaxis_title="R$ Líquido")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         st.subheader("Registro de Operações")
-        st.dataframe(pd.DataFrame(tx_data), use_container_width=True)
+        st.dataframe(pd.DataFrame(tx_data), width="stretch")
     else:
         st.info("Nenhuma operação registrada no banco de dados.")
 
@@ -288,7 +288,7 @@ elif menu == "📑 Gestão Fiscal & DARF":
                 "DARF (6015)": f"R$ {r.final_darf:,.2f}",
                 "Pago": "Sim" if r.is_paid else "Não",
             })
-        st.dataframe(pd.DataFrame(rec_data), use_container_width=True)
+        st.dataframe(pd.DataFrame(rec_data), width="stretch")
 
 # ==========================================
 # 5. REGISTRAR ORDEM
