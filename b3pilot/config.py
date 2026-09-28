@@ -21,6 +21,8 @@ MACOS_NOTIFICATIONS = os.getenv("MACOS_NOTIFICATIONS", "1") == "1"
 # Gestão de Risco e Parâmetros da Carteira
 DEFAULT_CAPITAL = float(os.getenv("DEFAULT_CAPITAL", "10000.00"))
 RISK_MAX_PER_TRADE_PERCENT = float(os.getenv("RISK_MAX_PER_TRADE_PERCENT", "0.02"))  # 2% de risco máx por trade
+MAX_POSITION_ALLOCATION_PERCENT = float(os.getenv("MAX_POSITION_ALLOCATION_PERCENT", "0.25"))  # Máx 25% do capital em um ativo
+MIN_ADTV_FINANCIAL = float(os.getenv("MIN_ADTV_FINANCIAL", "5000000.00"))  # Mínimo R$ 5M/dia em volume financeiro real
 
 # Pesos da Estratégia Híbrida
 WEIGHT_MEAN_REVERSION = 0.60  # 60% IFR2
@@ -28,12 +30,15 @@ WEIGHT_TREND_FOLLOWING = 0.40  # 40% Momentum / Seguidor de Tendência
 
 # Parâmetros Técnicos dos Setups
 IFR2_OVERSOLD_THRESHOLD = 10.0   # Nível de sobrevenda extrema no IFR(2)
+IFR2_EXTREME_OVERSOLD = 5.0      # Sobrevenda de pânico
 IFR2_TREND_SMA = 200             # Média de longo prazo para validar tendência
+IFR2_CATASTROPHIC_STOP_PERCENT = 0.10  # Stop catastrófico de 10% para não ser violado por ruído
+IFR2_TIME_STOP_DAYS = 5          # Saída no 5º pregão se não atingir a máxima
 TREND_EMA_FAST = 9               # Média rápida para momentum
 TREND_EMA_SLOW = 21              # Média lenta para momentum
 ATR_PERIOD = 14                  # Período para volatilidade ATR
 ATR_TRAILING_MULTIPLIER = 2.0    # Múltiplo de ATR para Trailing Stop
-TIME_STOP_DAYS = 10              # Número máx de pregões estagnados antes do time-stop
+TIME_STOP_DAYS = 10              # Número máx de pregões estagnados antes do time-stop geral
 
 # Regras Fiscais da B3 (Receita Federal)
 TAX_EXEMPTION_LIMIT_MONTHLY = 20000.00  # Limite de R$ 20.000 em vendas para isenção
