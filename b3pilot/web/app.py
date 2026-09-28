@@ -13,8 +13,17 @@ from b3pilot.ledger.db import init_db, get_db_session, Transaction, Position, Mo
 from b3pilot.ledger.portfolio import get_portfolio_summary, execute_buy, execute_sell
 from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
+from b3pilot.core.strategies import compute_indicators
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
-from b3pilot.data.universe import get_universe
+from b3pilot.data.universe import get_universe, SMALL_MID_CAPS, BLUE_CHIPS
+from b3pilot.data.b3_feed import (
+    fetch_ticker_data,
+    compute_multi_timeframe_variations,
+    get_statusinvest_url,
+    get_tradingview_url,
+    get_clean_ticker,
+    get_base_ticker,
+)
 from b3pilot.config import TAX_EXEMPTION_LIMIT_MONTHLY
 
 # Configuração da Página
@@ -65,6 +74,14 @@ st.markdown(
         font-weight: 600;
         font-size: 0.85rem;
     }
+    .legend-box {
+        background-color: #f8fafc;
+        border-left: 4px solid #3b82f6;
+        padding: 12px 16px;
+        border-radius: 4px;
+        margin-bottom: 16px;
+        font-size: 0.9rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -79,10 +96,18 @@ st.sidebar.markdown("**Assistente de Swing Trade & Proventos**")
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "Navegação:",
-    ["📊 Visão Geral da Carteira", "🎯 Radar & Proventos (Data COM)", "📜 Histórico & Performance", "📑 Gestão Fiscal & DARF", "➕ Registrar Ordem"],
+    [
+        "📊 Visão Geral da Carteira",
+        "🎯 Radar de Oportunidades & Proventos",
+        "📈 Análise Gráfica & Variações (1D a 10A)",
+        "📚 Guia dos Setups & Estratégias",
+        "📜 Histórico & Performance",
+        "📑 Gestão Fiscal & DARF",
+        "➕ Registrar Ordem",
+    ],
 )
 st.sidebar.markdown("---")
-st.sidebar.info("Modo de Operação: **Local / Antigravity Native**\n\nIsenção B3: **R$ 20.000,00/mês**")
+st.sidebar.info("Modo: **Local / Antigravity agy**\n\nIsenção B3: **R$ 20.000,00/mês**")
 
 # ==========================================
 # 1. VISÃO GERAL DA CARTEIRA
@@ -112,58 +137,118 @@ if menu == "📊 Visão Geral da Carteira":
             "stop_loss", "take_profit", "trailing_stop", "strategy", "entry_date"
         ]]
         df_pos.columns = [
-            "Ticker", "Qtd", "Preço Médio", "Cotação Atual",
-            "Valor Mercado", "PnL (R$)", "PnL (%)",
-            "Stop Loss", "Take Profit", "Trailing Stop", "Estratégia", "Data Entrada"
+            "Código da Ação", "Quantidade", "Preço Médio (R$)", "Cotação Atual (R$)",
+            "Valor a Mercado (R$)", "Resultado Não Realizado (R$)", "Rentabilidade (%)",
+            "Stop Loss (R$)", "Alvo / Take Profit (R$)", "Trailing Stop (R$)", "Estratégia", "Data de Entrada"
         ]
         st.dataframe(df_pos, width="stretch")
     else:
         st.info("Nenhuma ação em custódia no momento. Use o menu 'Registrar Ordem' para cadastrar sua primeira compra.")
 
 # ==========================================
-# 2. RADAR & PROVENTOS
+# 2. RADAR DE OPORTUNIDADES & PROVENTOS
 # ==========================================
-elif menu == "🎯 Radar & Proventos (Data COM)":
+elif menu == "🎯 Radar de Oportunidades & Proventos":
     st.title("Radar de Oportunidades & Calendário de Proventos")
 
     tab1, tab2 = st.tabs(["🔍 Radar de Setups Técnicos", "📅 Calendário de Data COM (Dividendos & JCP)"])
 
     with tab1:
-        st.subheader("Scanner de Confluência (IFR2 & Seguidor de Tendência)")
-        c1, c2, c3 = st.columns([2, 2, 1])
+        st.subheader("Scanner de Confluência na B3")
+
+        # Filtros de Segmento de Mercado
+        c1, c2, c3 = st.columns([3, 2, 1])
         with c1:
-            universe_mode = st.radio("Universo de Varredura:", ["Universo Completo B3 (~74 Ações)", "Apenas Top 20 Blue Chips"], horizontal=True)
+            segment_label = st.radio(
+                "Segmento de Mercado:",
+                [
+                    "🌟 Universo Amplo B3 (~100 Ações: Blue Chips + Small & Mid Caps)",
+                    "🚀 Small & Mid Caps / Fora do Radar (Empresas Menores de Alto Crescimento)",
+                    "🏢 Blue Chips Tradicionais (Grandes Empresas / IBOV)",
+                    "⚡ Top 20 Mais Líquidas",
+                ],
+                index=0,
+            )
         with c2:
             only_high = st.checkbox("Apenas Alta Convicção (Score >= 8.0 & R/R >= 2.2)", value=False)
             if not only_high:
-                min_score = st.slider("Score Mínimo:", min_value=6.0, max_value=9.0, value=7.0, step=0.5)
+                min_score = st.slider("Nota de Confluência Mínima:", min_value=6.0, max_value=9.5, value=7.0, step=0.5)
             else:
                 min_score = 8.0
         with c3:
             st.write("")
             btn_scan = st.button("🔄 Executar Scanner", type="primary")
 
-        top_only = (universe_mode == "Apenas Top 20 Blue Chips")
-        if btn_scan or "cached_scan" not in st.session_state:
-            with st.spinner("Escaneando ativos líquidos da B3..."):
-                selected_tickers = get_universe(top_only=top_only)
+        # Mapeamento do segmento
+        if "Small & Mid Caps" in segment_label:
+            category_code = "small_caps"
+        elif "Blue Chips" in segment_label:
+            category_code = "blue_chips"
+        elif "Top 20" in segment_label:
+            category_code = "top20"
+        else:
+            category_code = "all"
+
+        # Legenda Informativa
+        with st.expander("ℹ️ Legenda Informativa dos Termos da Tabela (Clique para abrir)"):
+            st.markdown(
+                r"""
+                - **Código da Ação (Ticker):** Código de negociação do ativo na B3 (ex: PETR4, KEPL3, WEGE3).
+                - **Setup (Estratégia):** Padrão matemático detectado:
+                  - *Reversão à Média (IFR2):* Correção aguda em papel que está em tendência primária de alta (alta taxa de acerto de 65-75%).
+                  - *Seguidor de Tendência (Momentum):* Rompimento ou repique em médias móveis alinhadas (alto ganho assimétrico de 2.5R a 5R).
+                  - *Captura Pré-Data COM:* Compra programada dias antes do corte de proventos em ativo com suporte técnico.
+                - **Nota de Confluência (Score 0 a 10):** Grau de alinhamento simultâneo entre tendência, volume financeiro, sobrevenda/rompimento e assimetria. Notas $\ge 8.0$ representam alta convicção.
+                - **Preço Entrada Ref. (R$):** Preço de referência do último fechamento para tomada de decisão no pregão.
+                - **Stop Loss (R$):** Limite máximo de perda tolerada. Se atingido, encerra-se a posição para proteger o patrimônio.
+                - **Alvo / Take Profit (R$):** Preço projetado para realização de lucros.
+                - **Relação Risco/Retorno (R/R):** Quantas vezes o ganho potencial supera o risco corrido (ex: 2.5x significa buscar R$ 2,50 de lucro para cada R$ 1,00 arriscado).
+                - **Ficha Fundamentalista:** Link direto para consultar indicadores da empresa no StatusInvest (P/L, ROE, Dívida Líquida, Margens).
+                """
+            )
+
+        if btn_scan or "cached_scan" not in st.session_state or st.session_state.get("last_category") != category_code:
+            with st.spinner("Escaneando ativos da B3..."):
+                selected_tickers = get_universe(category=category_code)
                 st.session_state["cached_scan"] = run_screener(
                     tickers=selected_tickers,
                     min_score=min_score,
                     high_conviction_only=only_high,
                     show_progress=False,
                 )
+                st.session_state["last_category"] = category_code
 
         results = st.session_state.get("cached_scan", [])
         if results:
             st.success(f"Encontradas {len(results)} oportunidades com setup ativo.")
-            df_scan = pd.DataFrame(results)[[
-                "ticker", "name", "score", "entry_price", "stop_loss", "take_profit", "rr_ratio", "reason"
-            ]]
-            df_scan.columns = ["Ticker", "Setup", "Score", "Entrada Ref.", "Stop Loss", "Take Profit", "R/R", "Justificativa Técnica"]
-            st.dataframe(df_scan, width="stretch")
+
+            # Monta dataframe formatado
+            table_rows = []
+            for r in results:
+                info_link = f"[{r['ticker']} no StatusInvest]({r['info_url']})"
+                chart_link = f"[{r['ticker']} no TradingView]({r['chart_url']})"
+                table_rows.append({
+                    "Código da Ação": r["ticker"],
+                    "Setup (Estratégia)": r["name"],
+                    "Nota de Confluência": f"{r['score']:.1f} / 10",
+                    "Preço Entrada (R$)": f"R$ {r['entry_price']:.2f}",
+                    "Stop Loss (R$)": f"R$ {r['stop_loss']:.2f}",
+                    "Alvo de Lucro (R$)": f"R$ {r['take_profit']:.2f}",
+                    "Relação R/R": f"{r.get('rr_ratio', 'N/A')}x",
+                    "Análise Técnica Detalhada": r["reason"].replace("\n", " | "),
+                    "Ficha Fundamentalista": info_link,
+                })
+
+            df_display = pd.DataFrame(table_rows)
+            st.dataframe(
+                df_display,
+                width="stretch",
+                column_config={
+                    "Ficha Fundamentalista": st.column_config.LinkColumn("Ficha Fundamentalista"),
+                },
+            )
         else:
-            st.info("Nenhuma oportunidade atende aos critérios selecionados no momento. Tente diminuir o Score Mínimo ou desmarcar a alta convicção.")
+            st.info("Nenhuma oportunidade atende aos critérios selecionados no momento. Tente selecionar 'Universo Amplo B3' ou diminuir a Nota de Confluência.")
 
     with tab2:
         st.subheader("Eventos de Proventos Próximos (Período Legal)")
@@ -172,20 +257,213 @@ elif menu == "🎯 Radar & Proventos (Data COM)":
         )
         if st.button("🔄 Atualizar Calendário de Proventos"):
             with st.spinner("Buscando proventos anunciados..."):
-                st.session_state["cached_divs"] = scan_upcoming_dividends(get_universe(top_only=True))
+                st.session_state["cached_divs"] = scan_upcoming_dividends(get_universe(category="all"))
 
         divs = st.session_state.get("cached_divs", [])
         if divs:
             df_divs = pd.DataFrame(divs)[[
                 "ticker", "data_com", "data_ex", "days_until_com", "estimated_value", "current_price", "projected_yield_pct"
             ]]
-            df_divs.columns = ["Ticker", "Data COM", "Data EX", "Dias até COM", "Provento Est. (R$)", "Cotação Atual", "Yield Estimado (%)"]
+            df_divs.columns = [
+                "Código da Ação", "Data COM (Corte)", "Data EX", "Dias até Data COM",
+                "Provento Estimado (R$)", "Cotação Atual (R$)", "Yield da Rodada (%)"
+            ]
             st.dataframe(df_divs, width="stretch")
         else:
             st.info("Nenhum anúncio recente com Data COM nos próximos 15 dias para os ativos monitorados.")
 
 # ==========================================
-# 3. HISTÓRICO & PERFORMANCE
+# 3. ANÁLISE GRÁFICA & VARIAÇÕES (1D a 10A)
+# ==========================================
+elif menu == "📈 Análise Gráfica & Variações (1D a 10A)":
+    st.title("Análise Gráfica e Retornos Históricos Multitemporais")
+    st.markdown("Consulte qualquer ação brasileira e visualize suas variações de **1 Dia a 10 Anos**, médias móveis e indicadores.")
+
+    col_input, col_info = st.columns([1, 2])
+    with col_input:
+        selected_ticker = st.text_input("Digite o Ticker da Ação (ex: WEGE3, PETR4, KEPL3, TAEE11):", value="WEGE3").strip().upper()
+
+    clean_t = get_clean_ticker(selected_ticker)
+    base_t = get_base_ticker(selected_ticker)
+
+    with st.spinner(f"Carregando dados históricos de {base_t}..."):
+        variations = compute_multi_timeframe_variations(clean_t)
+        df_hist = fetch_ticker_data(clean_t, period="5y")
+
+    if df_hist is not None and not df_hist.empty:
+        # Variações percentuais em cards
+        st.subheader(f"Variações Percentuais de {base_t}")
+        v_cols = st.columns(8)
+        periods = [
+            ("1D", "1 Dia"),
+            ("1S", "1 Semana"),
+            ("1M", "1 Mês"),
+            ("3M", "Trimestre"),
+            ("6M", "Semestre"),
+            ("1A", "1 Ano"),
+            ("5A", "5 Anos"),
+            ("10A", "10 Anos"),
+        ]
+
+        for i, (k, label) in enumerate(periods):
+            val = variations.get(k)
+            with v_cols[i]:
+                if val is not None:
+                    st.metric(label, f"{val:+.2f}%")
+                else:
+                    st.metric(label, "N/D")
+
+        # Links rápidos
+        st.markdown(
+            f"🔗 **Links Externos:** "
+            f"[[StatusInvest - Ficha de {base_t}]]({get_statusinvest_url(base_t)}) | "
+            f"[[TradingView - Gráfico de {base_t}]]({get_tradingview_url(base_t)})"
+        )
+
+        # Gráfico Interativo com Plotly
+        st.subheader("Gráfico Interativo de Cotação e Médias Móveis")
+        df_chart = compute_indicators(df_hist).dropna(subset=["SMA_200", "EMA_9", "EMA_21"])
+
+        timeframe_choice = st.radio(
+            "Período do Gráfico:",
+            ["Últimos 6 Meses", "Último 1 Ano", "Últimos 2 Anos", "Últimos 5 Anos"],
+            horizontal=True,
+            index=1,
+        )
+
+        if timeframe_choice == "Últimos 6 Meses":
+            df_plot = df_chart.tail(126)
+        elif timeframe_choice == "Último 1 Ano":
+            df_plot = df_chart.tail(252)
+        elif timeframe_choice == "Últimos 2 Anos":
+            df_plot = df_chart.tail(504)
+        else:
+            df_plot = df_chart
+
+        fig = go.Figure()
+        # Candlestick
+        fig.add_trace(
+            go.Candlestick(
+                x=df_plot.index,
+                open=df_plot["Open"],
+                high=df_plot["High"],
+                low=df_plot["Low"],
+                close=df_plot["Close"],
+                name="Preço (OHLC)",
+            )
+        )
+        # Médias
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["EMA_9"], line=dict(color="#3b82f6", width=1.5), name="EMA 9 (Rápida)"))
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["EMA_21"], line=dict(color="#f59e0b", width=1.5), name="EMA 21 (Intermediária)"))
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot["SMA_200"], line=dict(color="#ef4444", width=2), name="SMA 200 (Tendência Primária)"))
+
+        fig.update_layout(
+            template="plotly_white",
+            xaxis_rangeslider_visible=False,
+            height=500,
+            yaxis_title="Preço (R$)",
+            margin=dict(l=20, r=20, t=30, b=20),
+        )
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.error(f"Não foi possível obter dados para o ticker {selected_ticker}. Verifique se o código está correto na B3.")
+
+# ==========================================
+# 4. GUIA DOS SETUPS & ESTRATÉGIAS
+# ==========================================
+elif menu == "📚 Guia dos Setups & Estratégias":
+    st.title("Guia Técnico dos Setups de Swing Trade & Proventos")
+    st.markdown("Compreenda a fundamentação matemática, regras de entrada e gestão de risco de cada modelo operacional utilizado pelo sistema.")
+
+    g_tab1, g_tab2, g_tab3, g_tab4 = st.tabs([
+        "🟢 Reversão à Média (IFR2)",
+        "🚀 Seguidor de Tendência (Momentum)",
+        "💰 Captura Pré-Data COM",
+        "⭐ Como Funciona a Nota de Confluência",
+    ])
+
+    with g_tab1:
+        st.subheader("Setup IFR2 (Larry Connors) - Reversão à Média")
+        st.markdown(
+            """
+            ### O que é?
+            O **IFR2** é um dos setups quantitativos mais testados e comprovados da história dos mercados. Desenvolvido pelo estatístico norte-americano Larry Connors, ele se baseia no princípio de **reversão à média**: após uma sequência abrupta de quedas em um ativo estruturalmente forte, o preço tende a realizar um repique violento para equilibrar a oferta e a demanda.
+
+            ### Por que funciona tão bem na B3?
+            O mercado acionário brasileiro possui forte característica cíclica e oscilatória. Estatisticamente, em ações com alta liquidez na B3, o IFR2 apresenta **taxa de acerto histórica entre 65% e 75%**, com tempo médio de permanência no trade de apenas **2 a 5 pregões**.
+
+            ### Regras Operacionais Estritas:
+            1. **Filtro de Tendência Primária:** O preço de fechamento **deve estar acima da Média Móvel Simples de 200 períodos (SMA 200)**. Nunca compramos facas caindo em ativos com tendência de baixa de longo prazo.
+            2. **Gatilho de Compra:** O **IFR de 2 períodos (RSI 2)** deve fechar abaixo de **10** (sobrevenda extrema).
+            3. **Gatilho de Saída (Take Profit):** A posição é encerrada na **máxima dos últimos 2 pregões** (HIGH_2D) ou no primeiro fechamento acima da SMA 5.
+            4. **Stop de Proteção:** Stop loss inegociável posicionado a $2 \times \text{ATR(14)}$ abaixo do preço de compra.
+            """
+        )
+
+    with g_tab2:
+        st.subheader("Setup Seguidor de Tendência (Momentum & Médias Móveis)")
+        st.markdown(
+            """
+            ### O que é?
+            Inspirado nos conceitos de Larry Williams e Richard Donchian, o objetivo deste setup é **surfar grandes pernadas direcionais de alta** (rallys) que duram de 1 a 4 semanas. Enquanto a reversão à média busca pequenos ganhos frequentes, o seguidor de tendência busca **assimetria de retorno (Payoff elevado)**.
+
+            ### A Dinâmica Matemática:
+            - **Taxa de Acerto:** Moderada (40% a 50%).
+            - **Relação Ganho/Perda (Payoff):** Elevadíssima (3:1 a 5:1). Uma única operação vencedora compensa com sobra 3 ou 4 pequenos stops.
+
+            ### Regras Operacionais:
+            1. **Alinhamento Altista Clássico:** O preço deve estar acima da Média Móvel Exponencial rápida (EMA 9), que por sua vez deve estar acima da EMA lenta (EMA 21), ambas acima da SMA 200.
+            2. **Gatilho de Entrada:** Rompimento da máxima da vela de sinal após um recuo ou virada da EMA 9 para cima.
+            3. **Condução por Trailing Stop:** O stop loss não fica parado. Conforme a ação atinge novos topos, a linha de stop móvel é elevada progressivamente pela volatilidade ATR ($2 \times \text{ATR}$ abaixo da máxima).
+            4. **Alvo Projetado:** Projeção inicial de **2.5 vezes o risco corrido** ($2.5R$).
+            """
+        )
+
+    with g_tab3:
+        st.subheader("Estratégia de Captura de Proventos Pré-Data COM")
+        st.markdown(
+            """
+            ### O Ciclo Legal de Dividendos e JCP na B3:
+            1. **Data do Anúncio:** A empresa divulga o Fato Relevante informando que distribuirá proventos aos acionistas.
+            2. **Data COM (Data de Corte):** É o **último dia útil** em que você precisa estar com as ações em carteira para ter direito de receber o dividendo ou JCP.
+            3. **Data EX:** É o dia útil imediatamente seguinte à Data COM. A partir deste dia, quem comprar **não** receberá o provento.
+            4. **Data de Pagamento:** Quando o dinheiro cai efetivamente na conta da sua corretora.
+
+            ### O Dissenso Construtivo: A Armadilha da Data EX
+            Na B3, na abertura da **Data EX**, o preço da ação sofre um **desconto matemático no valor exato do dividendo**.
+            > *Exemplo:* Se uma ação fecha a Data COM a R$ 30,00 com anúncio de dividendo de R$ 2,00, ela abre a Data EX cotada a R$ 28,00.
+            
+            **Por isso, comprar apenas pelo dividendo é perigoso!** O algoritmo do B3 Ações Pilot só emite sinal de compra pré-Data COM se a ação estiver **sustentada acima da SMA 50**, garantindo que há força compradora no mercado para fechar o gap de proventos rapidamente.
+
+            ### Diferença Tributária: Dividendo vs. JCP
+            - **Dividendos:** São **100% isentos** de Imposto de Renda para pessoas físicas no Brasil.
+            - **Juros sobre Capital Próprio (JCP):** Sofrem retenção na fonte de **15% de IR** pela própria empresa. O valor creditado na sua conta já é líquido de impostos.
+            """
+        )
+
+    with g_tab4:
+        st.subheader("Como Funciona a Nota de Confluência (Score de 0 a 10)")
+        st.markdown(
+            r"""
+            A **Nota de Confluência** é um modelo estatístico proprietário que atribui pontos a uma oportunidade com base na convergência simultânea de múltiplos fatores técnicos e quantitativos:
+
+            | Fator Técnico Avaliado | Peso no Score | Critério de Pontuação |
+            | :--- | :---: | :--- |
+            | **Setup Base Identificado** | 7.0 pts | O ativo cumpriu todas as regras eliminatórias do setup. |
+            | **Sobrevenda Extrema (no IFR2)** | +1.5 pts | IFR(2) abaixo de 5.0 (nível de pânico raríssimo de mercado). |
+            | **Sobrevenda Moderada (no IFR2)** | +1.0 pt | IFR(2) entre 5.0 e 10.0. |
+            | **Volume Acima da Média** | +1.0 a +1.5 pts | Volume financeiro $\ge 1.3\times$ a média móvel de 21 dias (exaustão vendedora ou fluxo comprador institucional). |
+            | **Dividend Yield Relevante** | +1.0 a +1.5 pts | Provento na rodada superior a 1.5% a 2.0% da cotação. |
+            | **Janela Temporal Otimizada** | +0.5 pt | Data COM a menos de 4 pregões de distância. |
+
+            - **Score 8.0 a 10.0:** **Altíssima Convicção.** Todos os indicadores convergem na mesma direção. É o único nível que dispara alertas matinais no Telegram.
+            - **Score 7.0 a 7.9:** **Convicção Padrão.** O setup é matematicamente válido e possui bom risco/retorno.
+            - **Score < 7.0:** Descartado pelo filtro de qualidade.
+            """
+        )
+
+# ==========================================
+# 5. HISTÓRICO & PERFORMANCE
 # ==========================================
 elif menu == "📜 Histórico & Performance":
     st.title("Histórico de Trades e Curva de Capital")
@@ -253,7 +531,7 @@ elif menu == "📜 Histórico & Performance":
         st.info("Nenhuma operação registrada no banco de dados.")
 
 # ==========================================
-# 4. GESTÃO FISCAL & DARF
+# 6. GESTÃO FISCAL & DARF
 # ==========================================
 elif menu == "📑 Gestão Fiscal & DARF":
     st.title("Gestão Tributária e Apuração de DARF")
@@ -305,7 +583,7 @@ elif menu == "📑 Gestão Fiscal & DARF":
         st.dataframe(pd.DataFrame(rec_data), width="stretch")
 
 # ==========================================
-# 5. REGISTRAR ORDEM
+# 7. REGISTRAR ORDEM
 # ==========================================
 elif menu == "➕ Registrar Ordem":
     st.title("Registrar Nova Operação")
@@ -314,7 +592,7 @@ elif menu == "➕ Registrar Ordem":
 
     with tab_buy:
         with st.form("form_buy"):
-            ticker = st.text_input("Ticker do Ativo (ex: PETR4, VALE3, WEGE3)").upper()
+            ticker = st.text_input("Ticker do Ativo (ex: PETR4, VALE3, KEPL3, WEGE3)").upper()
             qty = st.number_input("Quantidade de Ações", min_value=1, step=100, value=100)
             price = st.number_input("Preço de Execução (R$)", min_value=0.01, step=0.01, format="%.2f", value=30.00)
             fees = st.number_input("Taxas e Emolumentos da B3 (R$)", min_value=0.0, step=0.10, value=1.50)
