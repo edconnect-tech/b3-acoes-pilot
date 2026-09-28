@@ -30,6 +30,11 @@ def evaluate_dividend_setup(df: pd.DataFrame, ticker: str) -> Optional[Dict[str,
     sma50 = float(last["SMA_50"])
     atr = float(last["ATR_14"]) if pd.notna(last["ATR_14"]) else (close * 0.03)
 
+    from b3pilot.config import MIN_ADTV_FINANCIAL
+    adtv = float(last["ADTV_21"]) if "ADTV_21" in last and pd.notna(last["ADTV_21"]) else 0.0
+    if adtv > 0 and adtv < MIN_ADTV_FINANCIAL:
+        return None
+
     # Dissenso Construtivo / Filtro de Segurança Essencial:
     # Não comprar ação em tendência de baixa apenas pelo dividendo.
     # O papel DEVE estar acima da SMA 50 para garantir suporte de mercado.
@@ -54,6 +59,8 @@ def evaluate_dividend_setup(df: pd.DataFrame, ticker: str) -> Optional[Dict[str,
 
     if days_until_com <= 4:
         score += 0.5  # Janela de tempo de alta atratividade
+    if adtv >= 20_000_000:
+        score += 0.5
 
     pct_stop = round(((close - stop_loss) / close) * 100, 2)
     pct_target = round(((target - close) / close) * 100, 2)
@@ -62,8 +69,9 @@ def evaluate_dividend_setup(df: pd.DataFrame, ticker: str) -> Optional[Dict[str,
         f"💰 Captura de Proventos Pré-Data COM:\n"
         f"• Data de Corte (Data COM): {div_info['data_com'].strftime('%d/%m/%Y')} (em {days_until_com} dias úteis)\n"
         f"• Provento Estimado: R$ {div_info['estimated_value']:.2f}/ação ({projected_yield:.2f}% de Dividend Yield na rodada)\n"
-        f"• Filtro Técnico de Proteção: Ativo sustentado acima da SMA 50 (R$ {sma50:.2f})\n"
-        f"• Alvo Projetado: R$ {target:.2f} (+{pct_target:.1f}%) | Stop Loss: R$ {stop_loss:.2f} (-{pct_stop:.1f}%)"
+        f"• Proteção Técnica: Sustentado acima da SMA 50 (R$ {sma50:.2f}) com ADTV de R$ {adtv / 1e6:.1f}M/dia\n"
+        f"• Alvo: R$ {target:.2f} (+{pct_target:.1f}%) | Stop Loss: R$ {stop_loss:.2f} (-{pct_stop:.1f}%)\n"
+        f"• ⚠️ REGRA MANDATÓRIA: Vender no fechamento da Data COM ({div_info['data_com'].strftime('%d/%m/%Y')}) para não carregar para a Data EX!"
     )
 
     return {

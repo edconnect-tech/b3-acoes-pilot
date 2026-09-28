@@ -20,11 +20,11 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 
 def get_clean_ticker(ticker: str) -> str:
-    """Garante que o ticker termine com .SA para o Yahoo Finance."""
+    """Garante que o ticker termine com .SA para o Yahoo Finance, exceto índices (^BVSP)."""
     ticker = ticker.strip().upper()
-    if not ticker.endswith(".SA"):
-        return f"{ticker}.SA"
-    return ticker
+    if ticker.startswith("^") or ticker.endswith(".SA"):
+        return ticker
+    return f"{ticker}.SA"
 
 
 def get_base_ticker(ticker: str) -> str:
@@ -110,6 +110,21 @@ def fetch_latest_price(ticker: str) -> Optional[float]:
     if df is not None and not df.empty:
         return float(df["Close"].iloc[-1])
     return None
+
+
+def compute_adtv_21(df: pd.DataFrame) -> float:
+    """Calcula o Volume Financeiro Médio Diário em Reais dos últimos 21 pregões (ADTV21)."""
+    if df is None or len(df) < 5 or "Close" not in df.columns or "Volume" not in df.columns:
+        return 0.0
+    financial_volume = df["Close"] * df["Volume"]
+    window = min(len(financial_volume), 21)
+    adtv = float(financial_volume.tail(window).mean())
+    return round(adtv, 2)
+
+
+def fetch_ibov_data(period: str = "1y", max_cache_age_hours: int = 4) -> Optional[pd.DataFrame]:
+    """Baixa a série temporal histórica do índice IBOVESPA (^BVSP)."""
+    return fetch_ticker_data("^BVSP", period=period, max_cache_age_hours=max_cache_age_hours)
 
 
 def compute_multi_timeframe_variations(ticker: str) -> Dict[str, Optional[float]]:

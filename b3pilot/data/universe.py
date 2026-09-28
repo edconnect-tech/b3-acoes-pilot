@@ -5,7 +5,6 @@ from typing import List, Dict
 # 1. Blue Chips e Grandes Empresas (IBOVESPA Tradicional)
 BLUE_CHIPS = [
     "ABEV3.SA",
-    "AXIA3.SA",
     "B3SA3.SA",
     "BBAS3.SA",
     "BBDC3.SA",
@@ -26,8 +25,9 @@ BLUE_CHIPS = [
     "GGBR4.SA",
     "ITSA4.SA",
     "ITUB4.SA",
-    "JBSS32.SA",
+    "JBSS3.SA",
     "KLBN11.SA",
+    "LREN3.SA",
     "PETR3.SA",
     "PETR4.SA",
     "PRIO3.SA",
@@ -117,7 +117,7 @@ TOP_LIQUID_TICKERS = [
     "WEGE3.SA",
     "PRIO3.SA",
     "RENT3.SA",
-    "AXIA3.SA",
+    "LREN3.SA",
     "GGBR4.SA",
     "SUZB3.SA",
     "RADL3.SA",
@@ -126,7 +126,7 @@ TOP_LIQUID_TICKERS = [
     "CMIG4.SA",
     "VIVT3.SA",
     "EQTL3.SA",
-    "JBSS32.SA",
+    "JBSS3.SA",
     "CSNA3.SA",
     "EMBJ3.SA",
 ]

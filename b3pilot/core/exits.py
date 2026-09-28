@@ -1,13 +1,12 @@
-"""Motor de avaliação de saídas: Stop Loss, Take Profit, Trailing Stop e Time-Stop."""
-
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 
 from b3pilot.ledger.db import Position
 from b3pilot.data.b3_feed import fetch_ticker_data, fetch_latest_price, get_clean_ticker
+from b3pilot.data.dividends_feed import get_ticker_dividend_calendar
 from b3pilot.core.strategies import compute_indicators
-from b3pilot.config import TIME_STOP_DAYS, ATR_TRAILING_MULTIPLIER
+from b3pilot.config import TIME_STOP_DAYS, ATR_TRAILING_MULTIPLIER, IFR2_TIME_STOP_DAYS
 
 
 def evaluate_open_positions_exits(session: Session) -> List[Dict[str, Any]]:
@@ -86,7 +85,8 @@ def evaluate_open_positions_exits(session: Session) -> List[Dict[str, Any]]:
             })
             continue
 
-        # 5. Saída específica do setup IFR2 (Máxima dos últimos 2 dias)
+        # 5. Saída específica do setup IFR2 (Máxima dos últimos 2 dias ou Time-Stop de 5 pregões)
+        days_in_trade = (datetime.utcnow() - pos.entry_date).days
         if pos.strategy == "IFR2":
             high_2d = float(last["HIGH_2D"]) if pd_not_na(last["HIGH_2D"]) else None
             if high_2d and current_price >= high_2d:
@@ -103,9 +103,40 @@ def evaluate_open_positions_exits(session: Session) -> List[Dict[str, Any]]:
                     "reason": f"⚡ ALVO IFR2 ATINGIDO: Papel repicou e superou a máxima de 2 dias (R$ {high_2d:.2f}). Encerrar posição de curto prazo.",
                 })
                 continue
+            elif days_in_trade >= IFR2_TIME_STOP_DAYS:
+                exit_signals.append({
+                    "ticker": ticker,
+                    "type": "SELL_IFR2_TIME_STOP",
+                    "urgency": "MEDIA",
+                    "price": current_price,
+                    "trigger_price": current_price,
+                    "strategy": pos.strategy,
+                    "quantity": pos.quantity,
+                    "entry_price": pos.average_price,
+                    "pnl_pct": round(((current_price - pos.average_price) / pos.average_price) * 100, 2),
+                    "reason": f"⏳ TIME-STOP IFR2 ({days_in_trade} pregões): Alvo não foi atingido no prazo ótimo de repique. Encerrar para desalocar capital com disciplina.",
+                })
+                continue
 
-        # 6. Checagem de Time-Stop (Posição estagnada)
-        days_in_trade = (datetime.utcnow() - pos.entry_date).days
+        # 6. Saída mandatória no encerramento da Data COM (Captura de Proventos)
+        if pos.strategy == "DIVIDEND_COM":
+            div_info = get_ticker_dividend_calendar(ticker)
+            if div_info and div_info.get("days_until_com", 999) <= 0:
+                exit_signals.append({
+                    "ticker": ticker,
+                    "type": "SELL_DATA_COM",
+                    "urgency": "ALTA",
+                    "price": current_price,
+                    "trigger_price": current_price,
+                    "strategy": pos.strategy,
+                    "quantity": pos.quantity,
+                    "entry_price": pos.average_price,
+                    "pnl_pct": round(((current_price - pos.average_price) / pos.average_price) * 100, 2),
+                    "reason": f"🚨 LIQUIDAÇÃO NA DATA COM: Hoje é o encerramento do prazo com direito ao dividendo. Vender no fechamento para evitar desconto compulsório na abertura da Data EX!",
+                })
+                continue
+
+        # 7. Checagem de Time-Stop Geral (Posição estagnada)
         if days_in_trade >= TIME_STOP_DAYS:
             pnl_pct = ((current_price - pos.average_price) / pos.average_price) * 100
             # Se após 10 pregões não andou nem 2%, encerra para desalocar capital
