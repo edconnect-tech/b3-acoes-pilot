@@ -78,12 +78,13 @@ def status():
 
 @app.command()
 def scan(
-    all_tickers: bool = typer.Option(False, "--all", "-a", help="Escanear todas as ações líquidas (demora mais)"),
-    high_conviction: bool = typer.Option(True, "--high", help="Filtrar apenas Compras Muito Vantajosas (Score >= 8.0)"),
+    all_tickers: bool = typer.Option(True, "--all/--top", help="Escanear universo completo (~74 ações) ou apenas Top 20"),
+    high_conviction: bool = typer.Option(False, "--high/--all-setups", help="Filtrar apenas Compras Muito Vantajosas (Score >= 8.0 & R/R >= 2.2)"),
+    min_score: float = typer.Option(7.0, "--min-score", "-m", help="Score mínimo de confluência (6.0 a 10.0)"),
 ):
     """Executa o scanner de mercado avaliando IFR2, Seguidor de Tendência e Proventos."""
     tickers = get_universe(top_only=not all_tickers)
-    results = run_screener(tickers=tickers, high_conviction_only=high_conviction, show_progress=True)
+    results = run_screener(tickers=tickers, min_score=min_score, high_conviction_only=high_conviction, show_progress=True)
 
     if not results:
         console.print("[dim]Nenhuma oportunidade atendeu aos critérios configurados hoje.[/dim]")

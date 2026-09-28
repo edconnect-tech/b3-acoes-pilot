@@ -130,26 +130,40 @@ elif menu == "🎯 Radar & Proventos (Data COM)":
 
     with tab1:
         st.subheader("Scanner de Confluência (IFR2 & Seguidor de Tendência)")
-        c1, c2 = st.columns([3, 1])
+        c1, c2, c3 = st.columns([2, 2, 1])
         with c1:
-            only_high = st.checkbox("Filtrar apenas Compras Muito Vantajosas (Score >= 8.0)", value=True)
+            universe_mode = st.radio("Universo de Varredura:", ["Universo Completo B3 (~74 Ações)", "Apenas Top 20 Blue Chips"], horizontal=True)
         with c2:
-            btn_scan = st.button("🔄 Executar Scanner Agora", type="primary")
+            only_high = st.checkbox("Apenas Alta Convicção (Score >= 8.0 & R/R >= 2.2)", value=False)
+            if not only_high:
+                min_score = st.slider("Score Mínimo:", min_value=6.0, max_value=9.0, value=7.0, step=0.5)
+            else:
+                min_score = 8.0
+        with c3:
+            st.write("")
+            btn_scan = st.button("🔄 Executar Scanner", type="primary")
 
+        top_only = (universe_mode == "Apenas Top 20 Blue Chips")
         if btn_scan or "cached_scan" not in st.session_state:
             with st.spinner("Escaneando ativos líquidos da B3..."):
-                top_tickers = get_universe(top_only=True)
-                st.session_state["cached_scan"] = run_screener(tickers=top_tickers, high_conviction_only=only_high, show_progress=False)
+                selected_tickers = get_universe(top_only=top_only)
+                st.session_state["cached_scan"] = run_screener(
+                    tickers=selected_tickers,
+                    min_score=min_score,
+                    high_conviction_only=only_high,
+                    show_progress=False,
+                )
 
         results = st.session_state.get("cached_scan", [])
         if results:
+            st.success(f"Encontradas {len(results)} oportunidades com setup ativo.")
             df_scan = pd.DataFrame(results)[[
                 "ticker", "name", "score", "entry_price", "stop_loss", "take_profit", "rr_ratio", "reason"
             ]]
             df_scan.columns = ["Ticker", "Setup", "Score", "Entrada Ref.", "Stop Loss", "Take Profit", "R/R", "Justificativa Técnica"]
             st.dataframe(df_scan, width="stretch")
         else:
-            st.info("Nenhuma oportunidade atende aos critérios restritivos no momento.")
+            st.info("Nenhuma oportunidade atende aos critérios selecionados no momento. Tente diminuir o Score Mínimo ou desmarcar a alta convicção.")
 
     with tab2:
         st.subheader("Eventos de Proventos Próximos (Período Legal)")
