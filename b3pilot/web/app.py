@@ -108,14 +108,19 @@ MENU_OPTIONS = [
     "📑 Gestão Fiscal & DARF",
     "➕ Registrar Ordem",
 ]
-if "nav_menu" not in st.session_state or st.session_state["nav_menu"] not in MENU_OPTIONS:
-    st.session_state["nav_menu"] = MENU_OPTIONS[0]
+if "selected_page" not in st.session_state or st.session_state["selected_page"] not in MENU_OPTIONS:
+    st.session_state["selected_page"] = MENU_OPTIONS[0]
 
-menu = st.sidebar.radio(
+nav_idx = MENU_OPTIONS.index(st.session_state["selected_page"])
+chosen_menu = st.sidebar.radio(
     "Navegação:",
     MENU_OPTIONS,
-    key="nav_menu",
+    index=nav_idx,
 )
+if chosen_menu != st.session_state["selected_page"]:
+    st.session_state["selected_page"] = chosen_menu
+
+menu = st.session_state["selected_page"]
 st.sidebar.markdown("---")
 portfolio_env = st.sidebar.radio(
     "Ambiente da Carteira:",
@@ -310,6 +315,7 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 })
 
             df_display = pd.DataFrame(table_rows)
+            st.caption("💡 **Navegação Integrada:** Clique em qualquer linha ou no código da ação para abrir instantaneamente sua **Análise Gráfica e Variações de 1D a 10 Anos**.")
             selection_event = st.dataframe(
                 df_display,
                 width="stretch",
@@ -324,34 +330,11 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 sel_idx = selection_event.selection.rows[0]
                 if sel_idx < len(results):
                     target_opp = results[sel_idx]
-                    st.session_state["analysis_ticker"] = target_opp["ticker"]
-                    st.session_state["nav_menu"] = "📈 Análise Gráfica & Variações (1D a 10A)"
+                    target_ticker = target_opp["ticker"]
+                    st.session_state["analysis_ticker"] = target_ticker
+                    st.session_state["input_analysis_ticker"] = target_ticker
+                    st.session_state["selected_page"] = "📈 Análise Gráfica & Variações (1D a 10A)"
                     st.rerun()
-
-            st.markdown("#### ⚡ Ações Rápidas nas Oportunidades Identificadas")
-            st.caption("Selecione uma linha na tabela acima ou use os atalhos abaixo para abrir a análise gráfica ou preencher a ordem automaticamente:")
-            for idx, r in enumerate(results):
-                c_act1, c_act2, c_act3, c_act4 = st.columns([2, 3, 3, 3])
-                with c_act1:
-                    st.markdown(f"**{r['ticker']}**")
-                    st.caption(f"Score: **{r['score']:.1f}**")
-                with c_act2:
-                    if st.button(f"📈 Ver Gráficos ({r['ticker']})", key=f"btn_chart_{r['ticker']}_{idx}"):
-                        st.session_state["analysis_ticker"] = r["ticker"]
-                        st.session_state["nav_menu"] = "📈 Análise Gráfica & Variações (1D a 10A)"
-                        st.rerun()
-                with c_act3:
-                    if st.button(f"🛒 Comprar {r['ticker']}", key=f"btn_buy_radar_{r['ticker']}_{idx}", type="primary"):
-                        st.session_state["order_ticker"] = r["ticker"]
-                        st.session_state["order_price"] = r["entry_price"]
-                        st.session_state["order_stop"] = r["stop_loss"]
-                        st.session_state["order_target"] = r["take_profit"]
-                        st.session_state["order_qty"] = r.get("suggested_shares", 100)
-                        st.session_state["order_strategy"] = r["strategy"]
-                        st.session_state["nav_menu"] = "➕ Registrar Ordem"
-                        st.rerun()
-                with c_act4:
-                    st.caption(f"Preço: R$ {r['entry_price']:.2f} | Stop: R$ {r['stop_loss']:.2f} | Alvo: R$ {r['take_profit']:.2f}")
         else:
             st.info("Nenhuma oportunidade atende aos critérios selecionados no momento. Tente selecionar 'Universo Amplo B3' ou diminuir a Nota de Confluência.")
 
@@ -499,15 +482,16 @@ elif menu == "📈 Análise Gráfica & Variações (1D a 10A)":
     st.title("Análise Gráfica e Retornos Históricos Multitemporais")
     st.markdown("Consulte qualquer ação brasileira e visualize suas variações de **1 Dia a 10 Anos**, médias móveis e indicadores.")
 
-    default_an_ticker = st.session_state.get("analysis_ticker", "WEGE3")
+    if "input_analysis_ticker" not in st.session_state:
+        st.session_state["input_analysis_ticker"] = st.session_state.get("analysis_ticker", "WEGE3")
+
     col_input, col_info = st.columns([1, 2])
     with col_input:
         selected_ticker = st.text_input(
             "Digite o Ticker da Ação (ex: WEGE3, PETR4, KEPL3, TAEE11):",
-            value=default_an_ticker,
             key="input_analysis_ticker",
         ).strip().upper()
-        if selected_ticker and selected_ticker != st.session_state.get("analysis_ticker"):
+        if selected_ticker:
             st.session_state["analysis_ticker"] = selected_ticker
 
     clean_t = get_clean_ticker(selected_ticker)
