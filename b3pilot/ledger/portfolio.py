@@ -206,3 +206,99 @@ def get_portfolio_summary(session: Session, is_simulated: Optional[bool] = False
         "num_positions": len(positions_data),
         "is_simulated": is_simulated,
     }
+
+
+def recalculate_position(session: Session, ticker: str, is_simulated: bool = False) -> Optional[Position]:
+    """Reconstrói a posição de custódia a partir do histórico cronológico de transações."""
+    base_ticker = get_base_ticker(ticker)
+    txs = (
+        session.query(Transaction)
+        .filter_by(ticker=base_ticker, is_simulated=is_simulated)
+        .order_by(Transaction.date.asc(), Transaction.id.asc())
+        .all()
+    )
+
+    pos = session.query(Position).filter_by(ticker=base_ticker, is_simulated=is_simulated).first()
+
+    if not txs:
+        if pos:
+            session.delete(pos)
+            session.commit()
+        return None
+
+    current_qty = 0
+    total_cost = 0.0
+    last_stop = None
+    last_target = None
+    last_strat = "MANUAL"
+    entry_date = None
+
+    for tx in txs:
+        if tx.type == "BUY":
+            op_cost = (tx.price * tx.quantity) + tx.fees
+            new_qty = current_qty + tx.quantity
+            if new_qty > 0:
+                avg = (total_cost + op_cost) / new_qty
+                current_qty = new_qty
+                total_cost = avg * current_qty
+            if not entry_date:
+                entry_date = tx.date
+            last_strat = tx.strategy or last_strat
+        elif tx.type == "SELL":
+            if current_qty > 0:
+                avg = total_cost / current_qty
+                current_qty = max(0, current_qty - tx.quantity)
+                total_cost = avg * current_qty
+                if current_qty == 0:
+                    entry_date = None
+
+    if current_qty <= 0:
+        if pos:
+            session.delete(pos)
+            session.commit()
+        return None
+
+    avg_price = total_cost / current_qty
+    if not pos:
+        pos = Position(
+            ticker=base_ticker,
+            quantity=current_qty,
+            average_price=round(avg_price, 4),
+            total_cost=round(total_cost, 2),
+            stop_loss=last_stop,
+            take_profit=last_target,
+            trailing_stop=last_stop,
+            highest_price=avg_price,
+            strategy=last_strat,
+            entry_date=entry_date or datetime.utcnow(),
+            is_simulated=is_simulated,
+        )
+        session.add(pos)
+    else:
+        pos.quantity = current_qty
+        pos.average_price = round(avg_price, 4)
+        pos.total_cost = round(total_cost, 2)
+
+    session.commit()
+    return pos
+
+
+def delete_transaction(session: Session, transaction_id: int) -> bool:
+    """Exclui uma transação e recalcula a custódia e tributos automaticamente."""
+    tx = session.query(Transaction).filter_by(id=transaction_id).first()
+    if not tx:
+        return False
+
+    ticker = tx.ticker
+    is_sim = tx.is_simulated
+    tx_type = tx.type
+    ym = tx.date.strftime("%Y-%m")
+
+    session.delete(tx)
+    session.commit()
+
+    recalculate_position(session, ticker, is_simulated=is_sim)
+    if tx_type == "SELL" and not is_sim:
+        recalculate_monthly_taxes(session, ym)
+    return True
+

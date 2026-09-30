@@ -8,9 +8,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+import time
 
 from b3pilot.ledger.db import init_db, get_db_session, Transaction, Position, MonthlyTaxRecord, DividendRecord
-from b3pilot.ledger.portfolio import get_portfolio_summary, execute_buy, execute_sell
+from b3pilot.ledger.portfolio import get_portfolio_summary, execute_buy, execute_sell, delete_transaction
 from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
 from b3pilot.core.strategies import compute_indicators
@@ -20,6 +21,7 @@ from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe, SMALL_MID_CAPS, BLUE_CHIPS
 from b3pilot.data.b3_feed import (
     fetch_ticker_data,
+    fetch_latest_price,
     compute_multi_timeframe_variations,
     get_statusinvest_url,
     get_tradingview_url,
@@ -96,18 +98,23 @@ session = get_db_session()
 st.sidebar.title("🚀 B3 Ações Pilot")
 st.sidebar.markdown("**Assistente de Swing Trade & Proventos**")
 st.sidebar.markdown("---")
+MENU_OPTIONS = [
+    "📊 Visão Geral da Carteira",
+    "🎯 Radar de Oportunidades & Proventos",
+    "🛡️ Auditoria de Travas de Baixa & Opções",
+    "📈 Análise Gráfica & Variações (1D a 10A)",
+    "📚 Guia dos Setups & Estratégias",
+    "📜 Histórico & Performance",
+    "📑 Gestão Fiscal & DARF",
+    "➕ Registrar Ordem",
+]
+if "nav_menu" not in st.session_state or st.session_state["nav_menu"] not in MENU_OPTIONS:
+    st.session_state["nav_menu"] = MENU_OPTIONS[0]
+
 menu = st.sidebar.radio(
     "Navegação:",
-    [
-        "📊 Visão Geral da Carteira",
-        "🎯 Radar de Oportunidades & Proventos",
-        "🛡️ Auditoria de Travas de Baixa & Opções",
-        "📈 Análise Gráfica & Variações (1D a 10A)",
-        "📚 Guia dos Setups & Estratégias",
-        "📜 Histórico & Performance",
-        "📑 Gestão Fiscal & DARF",
-        "➕ Registrar Ordem",
-    ],
+    MENU_OPTIONS,
+    key="nav_menu",
 )
 st.sidebar.markdown("---")
 portfolio_env = st.sidebar.radio(
@@ -303,13 +310,48 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 })
 
             df_display = pd.DataFrame(table_rows)
-            st.dataframe(
+            selection_event = st.dataframe(
                 df_display,
                 width="stretch",
                 column_config={
                     "Ficha Fundamentalista": st.column_config.LinkColumn("Ficha Fundamentalista"),
                 },
+                on_select="rerun",
+                selection_mode="single-row",
+                key="radar_table_select",
             )
+            if selection_event and hasattr(selection_event, "selection") and selection_event.selection.rows:
+                sel_idx = selection_event.selection.rows[0]
+                if sel_idx < len(results):
+                    target_opp = results[sel_idx]
+                    st.session_state["analysis_ticker"] = target_opp["ticker"]
+                    st.session_state["nav_menu"] = "📈 Análise Gráfica & Variações (1D a 10A)"
+                    st.rerun()
+
+            st.markdown("#### ⚡ Ações Rápidas nas Oportunidades Identificadas")
+            st.caption("Selecione uma linha na tabela acima ou use os atalhos abaixo para abrir a análise gráfica ou preencher a ordem automaticamente:")
+            for idx, r in enumerate(results):
+                c_act1, c_act2, c_act3, c_act4 = st.columns([2, 3, 3, 3])
+                with c_act1:
+                    st.markdown(f"**{r['ticker']}**")
+                    st.caption(f"Score: **{r['score']:.1f}**")
+                with c_act2:
+                    if st.button(f"📈 Ver Gráficos ({r['ticker']})", key=f"btn_chart_{r['ticker']}_{idx}"):
+                        st.session_state["analysis_ticker"] = r["ticker"]
+                        st.session_state["nav_menu"] = "📈 Análise Gráfica & Variações (1D a 10A)"
+                        st.rerun()
+                with c_act3:
+                    if st.button(f"🛒 Comprar {r['ticker']}", key=f"btn_buy_radar_{r['ticker']}_{idx}", type="primary"):
+                        st.session_state["order_ticker"] = r["ticker"]
+                        st.session_state["order_price"] = r["entry_price"]
+                        st.session_state["order_stop"] = r["stop_loss"]
+                        st.session_state["order_target"] = r["take_profit"]
+                        st.session_state["order_qty"] = r.get("suggested_shares", 100)
+                        st.session_state["order_strategy"] = r["strategy"]
+                        st.session_state["nav_menu"] = "➕ Registrar Ordem"
+                        st.rerun()
+                with c_act4:
+                    st.caption(f"Preço: R$ {r['entry_price']:.2f} | Stop: R$ {r['stop_loss']:.2f} | Alvo: R$ {r['take_profit']:.2f}")
         else:
             st.info("Nenhuma oportunidade atende aos critérios selecionados no momento. Tente selecionar 'Universo Amplo B3' ou diminuir a Nota de Confluência.")
 
@@ -457,9 +499,16 @@ elif menu == "📈 Análise Gráfica & Variações (1D a 10A)":
     st.title("Análise Gráfica e Retornos Históricos Multitemporais")
     st.markdown("Consulte qualquer ação brasileira e visualize suas variações de **1 Dia a 10 Anos**, médias móveis e indicadores.")
 
+    default_an_ticker = st.session_state.get("analysis_ticker", "WEGE3")
     col_input, col_info = st.columns([1, 2])
     with col_input:
-        selected_ticker = st.text_input("Digite o Ticker da Ação (ex: WEGE3, PETR4, KEPL3, TAEE11):", value="WEGE3").strip().upper()
+        selected_ticker = st.text_input(
+            "Digite o Ticker da Ação (ex: WEGE3, PETR4, KEPL3, TAEE11):",
+            value=default_an_ticker,
+            key="input_analysis_ticker",
+        ).strip().upper()
+        if selected_ticker and selected_ticker != st.session_state.get("analysis_ticker"):
+            st.session_state["analysis_ticker"] = selected_ticker
 
     clean_t = get_clean_ticker(selected_ticker)
     base_t = get_base_ticker(selected_ticker)
@@ -716,6 +765,27 @@ elif menu == "📜 Histórico & Performance":
 
         st.subheader("Registro de Operações")
         st.dataframe(pd.DataFrame(tx_data), width="stretch")
+
+        with st.expander("🛠️ Cancelar ou Excluir Ordem Acidental"):
+            st.markdown("Se você registrou uma ordem por engano ou com valores duplicados, selecione-a abaixo para excluí-la. A posição de custódia e o Preço Médio serão recalculados automaticamente.")
+            tx_options = {
+                f"ID #{t.id} - {t.date.strftime('%d/%m/%Y %H:%M')} | {t.type} {t.quantity} {t.ticker} @ R$ {t.price:.2f} (Taxas R$ {t.fees:.2f})": t.id
+                for t in transactions
+            }
+            if tx_options:
+                selected_tx_label = st.selectbox("Selecione a Transação a Excluir:", list(tx_options.keys()))
+                del_c1, del_c2 = st.columns([2, 3])
+                with del_c1:
+                    if st.button("🗑️ Confirmar Exclusão da Ordem", type="primary"):
+                        target_tx_id = tx_options[selected_tx_label]
+                        deleted = delete_transaction(session, target_tx_id)
+                        if deleted:
+                            st.success(f"✓ Transação #{target_tx_id} excluída com sucesso! Custódia e impostos recalculados.")
+                            st.rerun()
+                        else:
+                            st.error("Não foi possível excluir a transação.")
+                with del_c2:
+                    st.caption("A exclusão reverte as alterações na carteira e recalcula o Preço Médio a partir das transações restantes.")
     else:
         st.info("Nenhuma operação registrada no banco de dados.")
 
@@ -780,40 +850,129 @@ elif menu == "➕ Registrar Ordem":
     tab_buy, tab_sell = st.tabs(["🛒 Nova Compra", "💰 Nova Venda"])
 
     with tab_buy:
+        is_sim_order = st.checkbox(
+            "🧪 Ordem de Simulação / Paper Trading (Sem dinheiro real)",
+            value=is_sim_mode,
+            help="Se marcado, a ordem será registrada no Laboratório de Simulação sem comprometer seu capital real nem afetar seus impostos.",
+            key="buy_is_sim_order",
+        )
+
+        col_search_t, col_search_act = st.columns([3, 1])
+        with col_search_t:
+            default_t = st.session_state.get("order_ticker", "")
+            typed_ticker = st.text_input(
+                "Ticker da Ação (ex: AURE3, PETR4, VALE3, KEPL3, WEGE3):",
+                value=default_t,
+                key="order_ticker_input",
+                placeholder="Digite o código da ação para carregar cotação e alvos...",
+            ).strip().upper()
+
+        clean_typed = get_clean_ticker(typed_ticker) if typed_ticker else ""
+        base_typed = get_base_ticker(typed_ticker) if typed_ticker else ""
+
+        live_price = None
+        suggested_stop = 28.50
+        suggested_target = 33.50
+        default_price = 30.00
+        suggested_qty = st.session_state.get("order_qty", 100)
+        default_strategy = st.session_state.get("order_strategy", "IFR2")
+
+        if base_typed:
+            with st.spinner(f"Consultando cotação e dados de mercado de {base_typed}..."):
+                live_price = fetch_latest_price(base_typed)
+                df_quote = fetch_ticker_data(clean_typed, period="1mo")
+
+            if live_price and live_price > 0:
+                if st.session_state.get("order_ticker") == base_typed and "order_price" in st.session_state:
+                    default_price = float(st.session_state.get("order_price", live_price))
+                    suggested_stop = float(st.session_state.get("order_stop", live_price * 0.95))
+                    suggested_target = float(st.session_state.get("order_target", live_price * 1.10))
+                else:
+                    default_price = float(live_price)
+                    atr = 0.0
+                    if df_quote is not None and not df_quote.empty and len(df_quote) >= 5:
+                        import pandas_ta as ta
+                        df_quote.ta.atr(length=14, append=True)
+                        atr_col = [c for c in df_quote.columns if c.startswith("ATRr")]
+                        if atr_col and not df_quote[atr_col[0]].isna().all():
+                            atr = float(df_quote[atr_col[0]].dropna().iloc[-1])
+                    if atr > 0:
+                        suggested_stop = round(max(0.01, live_price - 2.0 * atr), 2)
+                        suggested_target = round(live_price + 2.5 * (2.0 * atr), 2)
+                    else:
+                        suggested_stop = round(live_price * 0.95, 2)
+                        suggested_target = round(live_price * 1.10, 2)
+                    suggested_qty = calculate_position_size(DEFAULT_CAPITAL, live_price, suggested_stop)
+
+                inf1, inf2, inf3, inf4 = st.columns(4)
+                with inf1:
+                    st.metric("Cotação Atual a Mercado", f"R$ {live_price:.2f}")
+                with inf2:
+                    st.metric("Stop Loss Sugerido", f"R$ {suggested_stop:.2f}")
+                with inf3:
+                    st.metric("Alvo Sugerido (2.5R)", f"R$ {suggested_target:.2f}")
+                with inf4:
+                    st.metric("Lote Sugerido (2% Risco)", f"{suggested_qty} ações")
+
+                existing_pos = session.query(Position).filter_by(ticker=base_typed, is_simulated=is_sim_order).first()
+                if existing_pos:
+                    env_name = "Simulação" if is_sim_order else "Real"
+                    st.info(
+                        f"📊 **Posição Existente em Custódia ({env_name}):** "
+                        f"Você possui **{existing_pos.quantity} ações** com Preço Médio de **R$ {existing_pos.average_price:.2f}** "
+                        f"(Custo Total: R$ {existing_pos.total_cost:,.2f})."
+                    )
+            else:
+                st.warning(f"Não foi possível obter cotação automática para `{base_typed}`. Você pode preencher os valores manualmente.")
+
         with st.form("form_buy"):
-            is_sim_order = st.checkbox(
-                "🧪 Ordem de Simulação / Paper Trading (Sem dinheiro real)",
-                value=is_sim_mode,
-                help="Se marcado, a ordem será registrada no Laboratório de Simulação sem comprometer seu capital real nem afetar seus impostos.",
-            )
-            ticker = st.text_input("Ticker do Ativo (ex: PETR4, VALE3, KEPL3, WEGE3)").upper()
-            qty = st.number_input("Quantidade de Ações", min_value=1, step=100, value=100)
-            price = st.number_input("Preço de Execução (R$)", min_value=0.01, step=0.01, format="%.2f", value=30.00)
-            fees = st.number_input("Taxas e Emolumentos da B3 (R$)", min_value=0.0, step=0.10, value=1.50)
-            stop_loss = st.number_input("Stop Loss (R$)", min_value=0.0, step=0.01, value=28.50)
-            take_profit = st.number_input("Take Profit / Alvo (R$)", min_value=0.0, step=0.01, value=33.50)
-            strategy = st.selectbox("Estratégia", ["IFR2", "TREND", "DIVIDEND_COM", "MANUAL"])
+            st.markdown("##### Detalhes da Ordem de Compra")
+            f_col1, f_col2 = st.columns(2)
+            with f_col1:
+                qty = st.number_input("Quantidade de Ações", min_value=1, step=10, value=int(suggested_qty))
+                price = st.number_input("Preço de Execução (R$)", min_value=0.01, step=0.01, format="%.2f", value=float(default_price))
+                fees = st.number_input("Taxas e Emolumentos da B3 (R$)", min_value=0.0, step=0.10, value=1.50)
+            with f_col2:
+                stop_loss = st.number_input("Stop Loss (R$)", min_value=0.0, step=0.01, value=float(suggested_stop))
+                take_profit = st.number_input("Take Profit / Alvo (R$)", min_value=0.0, step=0.01, value=float(suggested_target))
+                strat_options = ["IFR2", "TREND", "DIVIDEND_COM", "MANUAL"]
+                strat_idx = strat_options.index(default_strategy) if default_strategy in strat_options else 0
+                strategy = st.selectbox("Estratégia", strat_options, index=strat_idx)
+
             notes = st.text_area("Notas / Justificativa da Entrada")
 
             submitted_buy = st.form_submit_button("Confirmar Compra", type="primary")
             if submitted_buy:
-                if not ticker:
-                    st.error("Informe o ticker da ação.")
+                if not base_typed:
+                    st.error("Informe o ticker da ação antes de confirmar.")
                 else:
-                    pos = execute_buy(
-                        session=session,
-                        ticker=ticker,
-                        quantity=qty,
-                        price=price,
-                        fees=fees,
-                        stop_loss=stop_loss if stop_loss > 0 else None,
-                        take_profit=take_profit if take_profit > 0 else None,
-                        strategy=strategy,
-                        notes=notes,
-                        is_simulated=is_sim_order,
-                    )
-                    env_label = "Simulada (Paper Trading)" if is_sim_order else "Real"
-                    st.success(f"Compra {env_label} registrada com sucesso! Posição atualizada para {pos.quantity} ações de {pos.ticker} a PM de R$ {pos.average_price:.2f}.")
+                    submit_key = f"{base_typed}_{qty}_{price}_{is_sim_order}"
+                    now_ts = time.time()
+                    last_submit_key = st.session_state.get("last_submit_key")
+                    last_submit_time = st.session_state.get("last_submit_time", 0.0)
+
+                    if submit_key == last_submit_key and (now_ts - last_submit_time) < 4.0:
+                        st.warning("⚠️ Esta ordem acabou de ser processada! Evitamos um registro duplicado.")
+                    else:
+                        st.session_state["last_submit_key"] = submit_key
+                        st.session_state["last_submit_time"] = now_ts
+
+                        pos = execute_buy(
+                            session=session,
+                            ticker=base_typed,
+                            quantity=qty,
+                            price=price,
+                            fees=fees,
+                            stop_loss=stop_loss if stop_loss > 0 else None,
+                            take_profit=take_profit if take_profit > 0 else None,
+                            strategy=strategy,
+                            notes=notes,
+                            is_simulated=is_sim_order,
+                        )
+                        env_label = "Simulada (Paper Trading)" if is_sim_order else "Real"
+                        st.success(f"✓ Compra {env_label} registrada com sucesso! Posição atualizada para {pos.quantity} ações de {pos.ticker} a PM de R$ {pos.average_price:.2f}.")
+                        for k in ["order_ticker", "order_price", "order_stop", "order_target", "order_qty", "order_strategy"]:
+                            st.session_state.pop(k, None)
 
     with tab_sell:
         positions = session.query(Position).filter_by(is_simulated=is_sim_mode).all()
@@ -826,7 +985,7 @@ elif menu == "➕ Registrar Ordem":
                 selected_pos = session.query(Position).filter_by(ticker=ticker_sell, is_simulated=is_sim_mode).first()
                 st.caption(f"Quantidade em custódia {env_label}: {selected_pos.quantity} | Preço Médio: R$ {selected_pos.average_price:.2f}")
 
-                qty_sell = st.number_input("Quantidade a Vender", min_value=1, max_value=selected_pos.quantity, step=100, value=selected_pos.quantity)
+                qty_sell = st.number_input("Quantidade a Vender", min_value=1, max_value=selected_pos.quantity, step=10, value=selected_pos.quantity)
                 price_sell = st.number_input("Preço de Venda (R$)", min_value=0.01, step=0.01, format="%.2f", value=selected_pos.average_price * 1.05)
                 fees_sell = st.number_input("Taxas e Emolumentos (R$)", min_value=0.0, step=0.10, value=1.50)
                 notes_sell = st.text_area("Notas do Encerramento")

@@ -116,3 +116,35 @@ def test_compensacao_prejuizo_acumulado(test_db):
     assert rec_aug.accumulated_loss == 0.0
     # 15% de R$ 2.000 = R$ 300,00
     assert rec_aug.tax_due == 300.00
+
+
+def test_delete_transaction_recalculates_position(test_db):
+    """Valida que a exclusão de uma transação acidental reconstrói a posição e o PM perfeitamente."""
+    from b3pilot.ledger.portfolio import delete_transaction
+
+    # Compra 1: 10 ações a R$ 10,00 (Total R$ 100)
+    execute_buy(test_db, "TEST3", 10, 10.00, fees=0.0)
+    # Compra 2 (duplicada acidentalmente): 10 ações a R$ 10,00
+    execute_buy(test_db, "TEST3", 10, 10.00, fees=0.0)
+
+    pos = test_db.query(Position).filter_by(ticker="TEST3").first()
+    assert pos.quantity == 20
+    assert pos.total_cost == 200.00
+
+    # Pega o ID da segunda transação e exclui
+    tx2 = test_db.query(Transaction).filter_by(ticker="TEST3").order_by(Transaction.id.desc()).first()
+    success = delete_transaction(test_db, tx2.id)
+    assert success is True
+
+    # Posição deve ter voltado para 10 ações e R$ 100,00
+    pos_after = test_db.query(Position).filter_by(ticker="TEST3").first()
+    assert pos_after.quantity == 10
+    assert pos_after.total_cost == 100.00
+    assert pos_after.average_price == 10.00
+
+    # Exclui a primeira transação também: posição deve ser removida
+    tx1 = test_db.query(Transaction).filter_by(ticker="TEST3").first()
+    delete_transaction(test_db, tx1.id)
+    pos_empty = test_db.query(Position).filter_by(ticker="TEST3").first()
+    assert pos_empty is None
+
