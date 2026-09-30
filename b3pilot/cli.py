@@ -274,7 +274,7 @@ def taxes():
 
 @app.command()
 def alert():
-    """Executa manualmente a rotina matinal das 09:15 BRT com disparo de notificações."""
+    """Executa manualmente a rotina matinal das 09:55 BRT com disparo de notificações."""
     run_morning_routine(dry_run=False)
 
 

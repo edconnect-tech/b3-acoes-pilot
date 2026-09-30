@@ -1,4 +1,4 @@
-"""Rotina Matinal Automática (09:15 BRT) - Avaliação de Saídas, Oportunidades e Regime Macro."""
+"""Rotina Matinal Automática (09:55 BRT - Horário de Brasília) - Avaliação de Saídas, Oportunidades e Regime Macro."""
 
 from datetime import datetime
 from typing import Dict, Any, List
@@ -14,7 +14,7 @@ console = Console()
 
 
 def run_morning_routine(dry_run: bool = False) -> Dict[str, Any]:
-    """Executa a rotina consolidada das 09:15 BRT antes da abertura do pregão da B3."""
+    """Executa a rotina consolidada das 09:55 BRT (Horário de Brasília) antes da abertura do pregão da B3."""
     init_db()
     session = get_db_session()
 

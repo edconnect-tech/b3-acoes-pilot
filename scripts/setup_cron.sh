@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configura o agendador nativo do macOS (launchd) para rodar o alerta matinal às 09:15 BRT (Seg-Sex)
+# Configura o agendador nativo do macOS (launchd) para rodar o alerta matinal às 09:55 BRT (America/Sao_Paulo - Seg-Sex)
 
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_FILE="$PLIST_DIR/com.b3pilot.morning.plist"
@@ -21,16 +21,16 @@ cat << EOF > "$PLIST_FILE"
     </array>
     <key>StartCalendarInterval</key>
     <array>
-        <!-- Segunda-feira às 09:15 -->
-        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
-        <!-- Terça-feira às 09:15 -->
-        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
-        <!-- Quarta-feira às 09:15 -->
-        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
-        <!-- Quinta-feira às 09:15 -->
-        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
-        <!-- Sexta-feira às 09:15 -->
-        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>15</integer></dict>
+        <!-- Segunda-feira às 09:55 BRT -->
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>55</integer></dict>
+        <!-- Terça-feira às 09:55 BRT -->
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>55</integer></dict>
+        <!-- Quarta-feira às 09:55 BRT -->
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>55</integer></dict>
+        <!-- Quinta-feira às 09:55 BRT -->
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>55</integer></dict>
+        <!-- Sexta-feira às 09:55 BRT -->
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>55</integer></dict>
     </array>
     <key>StandardOutPath</key>
     <string>/tmp/b3pilot_morning.log</string>
