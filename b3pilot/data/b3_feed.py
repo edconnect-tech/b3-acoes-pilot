@@ -80,7 +80,8 @@ def fetch_ticker_data(
                 auto_adjust=True,
             )
 
-        if data is None or data.empty or len(data) < 15:
+        min_rows = 1 if period in ["1d", "5d", "1mo"] else 15
+        if data is None or data.empty or len(data) < min_rows:
             return None
 
         # Corrige colunas se vierem com MultiIndex do yfinance
@@ -106,9 +107,17 @@ def fetch_ticker_data(
 
 def fetch_latest_price(ticker: str) -> Optional[float]:
     """Retorna o último preço de fechamento/negociação de um ativo."""
-    df = fetch_ticker_data(ticker, period="5d")
+    df = fetch_ticker_data(ticker, period="1mo")
     if df is not None and not df.empty:
         return float(df["Close"].iloc[-1])
+
+    # Tenta remover o sufixo fracionário 'F' se aplicável (ex: SOJA3F -> SOJA3)
+    clean = get_base_ticker(ticker)
+    if clean.endswith("F") and len(clean) >= 5 and clean[-2].isdigit():
+        df_base = fetch_ticker_data(clean[:-1], period="1mo")
+        if df_base is not None and not df_base.empty:
+            return float(df_base["Close"].iloc[-1])
+
     return None
 
 
