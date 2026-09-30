@@ -110,6 +110,14 @@ menu = st.sidebar.radio(
     ],
 )
 st.sidebar.markdown("---")
+portfolio_env = st.sidebar.radio(
+    "Ambiente da Carteira:",
+    ["💼 Carteira Real", "🧪 Laboratório / Simulação (Paper Trading)"],
+    index=0,
+)
+is_sim_mode = "Simulação" in portfolio_env
+
+st.sidebar.markdown("---")
 st.sidebar.info("Modo: **Local / Antigravity agy**\n\nIsenção B3: **R$ 20.000,00/mês**")
 
 # Gatekeeper Macro IBOVESPA no Topo
@@ -135,8 +143,18 @@ with reg_col2:
 # 1. VISÃO GERAL DA CARTEIRA
 # ==========================================
 if menu == "📊 Visão Geral da Carteira":
-    st.title("Visão Geral da Custódia")
-    summary = get_portfolio_summary(session)
+    env_title = "🧪 Laboratório de Simulação (Paper Trading)" if is_sim_mode else "💼 Custódia Real"
+    st.title(f"Visão Geral — {env_title}")
+
+    if is_sim_mode:
+        st.markdown(
+            '<div class="badge-warning" style="font-size:0.95rem; padding:10px 14px; margin-bottom:16px; border:1px solid #f59e0b;">'
+            '🧪 <b>AMBIENTE DE SIMULAÇÃO (PAPER TRADING) ATIVO:</b> Estas posições e métricas de rentabilidade são 100% virtuais para testes sem risco financeiro real.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    summary = get_portfolio_summary(session, is_simulated=is_sim_mode)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -626,9 +644,20 @@ elif menu == "📚 Guia dos Setups & Estratégias":
 # 5. HISTÓRICO & PERFORMANCE
 # ==========================================
 elif menu == "📜 Histórico & Performance":
-    st.title("Histórico de Trades e Curva de Capital")
+    env_title = "🧪 Laboratório de Simulação" if is_sim_mode else "💼 Carteira Real"
+    st.title(f"Histórico de Trades e Curva de Capital — {env_title}")
 
-    transactions = session.query(Transaction).order_by(Transaction.date.asc()).all()
+    if is_sim_mode:
+        st.caption("Exibindo métricas de performance das operações virtuais / simuladas (Paper Trading).")
+    else:
+        st.caption("Exibindo métricas de performance das operações reais executadas na corretora.")
+
+    transactions = (
+        session.query(Transaction)
+        .filter_by(is_simulated=is_sim_mode)
+        .order_by(Transaction.date.asc())
+        .all()
+    )
     if transactions:
         tx_data = []
         cumulative_pnl = 0.0
@@ -752,6 +781,11 @@ elif menu == "➕ Registrar Ordem":
 
     with tab_buy:
         with st.form("form_buy"):
+            is_sim_order = st.checkbox(
+                "🧪 Ordem de Simulação / Paper Trading (Sem dinheiro real)",
+                value=is_sim_mode,
+                help="Se marcado, a ordem será registrada no Laboratório de Simulação sem comprometer seu capital real nem afetar seus impostos.",
+            )
             ticker = st.text_input("Ticker do Ativo (ex: PETR4, VALE3, KEPL3, WEGE3)").upper()
             qty = st.number_input("Quantidade de Ações", min_value=1, step=100, value=100)
             price = st.number_input("Preço de Execução (R$)", min_value=0.01, step=0.01, format="%.2f", value=30.00)
@@ -776,18 +810,21 @@ elif menu == "➕ Registrar Ordem":
                         take_profit=take_profit if take_profit > 0 else None,
                         strategy=strategy,
                         notes=notes,
+                        is_simulated=is_sim_order,
                     )
-                    st.success(f"Compra registrada com sucesso! Posição atualizada para {pos.quantity} ações de {pos.ticker} a PM de R$ {pos.average_price:.2f}.")
+                    env_label = "Simulada (Paper Trading)" if is_sim_order else "Real"
+                    st.success(f"Compra {env_label} registrada com sucesso! Posição atualizada para {pos.quantity} ações de {pos.ticker} a PM de R$ {pos.average_price:.2f}.")
 
     with tab_sell:
-        positions = session.query(Position).all()
+        positions = session.query(Position).filter_by(is_simulated=is_sim_mode).all()
+        env_label = "simulada" if is_sim_mode else "real"
         if not positions:
-            st.info("Nenhuma posição disponível para venda.")
+            st.info(f"Nenhuma posição em custódia {env_label} disponível para venda.")
         else:
             with st.form("form_sell"):
                 ticker_sell = st.selectbox("Selecione o Ativo em Custódia", [p.ticker for p in positions])
-                selected_pos = session.query(Position).filter_by(ticker=ticker_sell).first()
-                st.caption(f"Quantidade em custódia: {selected_pos.quantity} | Preço Médio: R$ {selected_pos.average_price:.2f}")
+                selected_pos = session.query(Position).filter_by(ticker=ticker_sell, is_simulated=is_sim_mode).first()
+                st.caption(f"Quantidade em custódia {env_label}: {selected_pos.quantity} | Preço Médio: R$ {selected_pos.average_price:.2f}")
 
                 qty_sell = st.number_input("Quantidade a Vender", min_value=1, max_value=selected_pos.quantity, step=100, value=selected_pos.quantity)
                 price_sell = st.number_input("Preço de Venda (R$)", min_value=0.01, step=0.01, format="%.2f", value=selected_pos.average_price * 1.05)
@@ -803,7 +840,8 @@ elif menu == "➕ Registrar Ordem":
                         price=price_sell,
                         fees=fees_sell,
                         notes=notes_sell,
+                        is_simulated=is_sim_mode,
                     )
-                    st.success(f"Venda confirmada! PnL Líquido Realizado: R$ {res['realized_pnl']:,.2f} ({res['realized_pnl_pct']:+.2f}%).")
+                    st.success(f"Venda {env_label} confirmada! PnL Líquido Realizado: R$ {res['realized_pnl']:,.2f} ({res['realized_pnl_pct']:+.2f}%).")
 
 session.close()

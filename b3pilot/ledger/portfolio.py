@@ -20,8 +20,9 @@ def execute_buy(
     strategy: str = "MANUAL",
     notes: Optional[str] = None,
     date: Optional[datetime] = None,
+    is_simulated: bool = False,
 ) -> Position:
-    """Registra uma ordem de COMPRA, atualizando a custódia e o Preço Médio oficial."""
+    """Registra uma ordem de COMPRA (Real ou Simulada), atualizando a custódia e Preço Médio."""
     base_ticker = get_base_ticker(ticker)
     tx_date = date or datetime.utcnow()
 
@@ -39,11 +40,12 @@ def execute_buy(
         realized_pnl=0.0,
         strategy=strategy,
         notes=notes,
+        is_simulated=is_simulated,
     )
     session.add(tx)
 
-    # Atualiza ou cria a posição em custódia
-    pos = session.query(Position).filter_by(ticker=base_ticker).first()
+    # Atualiza ou cria a posição na respectiva custódia (Real ou Simulada)
+    pos = session.query(Position).filter_by(ticker=base_ticker, is_simulated=is_simulated).first()
     if pos:
         old_total_cost = pos.average_price * pos.quantity
         new_quantity = pos.quantity + quantity
@@ -57,7 +59,7 @@ def execute_buy(
         if take_profit:
             pos.take_profit = take_profit
     else:
-        # Primeira compra do ativo
+        # Primeira compra do ativo neste ambiente
         avg_price = total_cost_operation / quantity
         pos = Position(
             ticker=base_ticker,
@@ -70,6 +72,7 @@ def execute_buy(
             highest_price=price,
             strategy=strategy,
             entry_date=tx_date,
+            is_simulated=is_simulated,
         )
         session.add(pos)
 
@@ -86,24 +89,23 @@ def execute_sell(
     fees: float = 0.0,
     notes: Optional[str] = None,
     date: Optional[datetime] = None,
+    is_simulated: bool = False,
 ) -> Dict[str, Any]:
-    """Registra uma ordem de VENDA, calcula PnL líquido e atualiza obrigações fiscais."""
+    """Registra uma ordem de VENDA, calcula PnL líquido e atualiza tributos apenas se for Real."""
     base_ticker = get_base_ticker(ticker)
     tx_date = date or datetime.utcnow()
 
-    pos = session.query(Position).filter_by(ticker=base_ticker).first()
+    pos = session.query(Position).filter_by(ticker=base_ticker, is_simulated=is_simulated).first()
+    env_name = "simulada" if is_simulated else "real"
     if not pos or pos.quantity < quantity:
         raise ValueError(
-            f"Quantidade insuficiente em custódia para vender {quantity} de {base_ticker}. "
+            f"Quantidade insuficiente em custódia {env_name} para vender {quantity} de {base_ticker}. "
             f"Disponível: {pos.quantity if pos else 0}."
         )
 
-    # Cálculo oficial da Receita Federal:
-    # Receita líquida da venda = (Preço * Quantidade) - Taxas
+    # Cálculo do resultado líquido da operação
     net_sale_value = (price * quantity) - fees
-    # Custo de aquisição proporcional pelo Preço Médio
     acquisition_cost = pos.average_price * quantity
-    # Resultado Líquido da Operação
     realized_pnl = net_sale_value - acquisition_cost
 
     tx = Transaction(
@@ -117,6 +119,7 @@ def execute_sell(
         realized_pnl=round(realized_pnl, 2),
         strategy=pos.strategy,
         notes=notes,
+        is_simulated=is_simulated,
     )
     session.add(tx)
 
@@ -130,9 +133,15 @@ def execute_sell(
 
     session.commit()
 
-    # Recalcula apuração fiscal do mês
     year_month = tx_date.strftime("%Y-%m")
-    tax_record = recalculate_monthly_taxes(session, year_month)
+    # Recalcula apuração fiscal da Receita Federal APENAS se a operação for REAL
+    if not is_simulated:
+        tax_record = recalculate_monthly_taxes(session, year_month)
+        is_exempt = tax_record.is_exempt
+        final_darf = tax_record.final_darf
+    else:
+        is_exempt = True
+        final_darf = 0.0
 
     return {
         "ticker": base_ticker,
@@ -142,14 +151,18 @@ def execute_sell(
         "realized_pnl_pct": round((realized_pnl / acquisition_cost) * 100, 2) if acquisition_cost > 0 else 0.0,
         "remaining_quantity": remaining_qty,
         "tax_year_month": year_month,
-        "is_exempt_month": tax_record.is_exempt,
-        "final_darf_month": tax_record.final_darf,
+        "is_exempt_month": is_exempt,
+        "final_darf_month": final_darf,
+        "is_simulated": is_simulated,
     }
 
 
-def get_portfolio_summary(session: Session) -> Dict[str, Any]:
-    """Retorna o estado consolidado da carteira atual com cotações a mercado."""
-    positions = session.query(Position).all()
+def get_portfolio_summary(session: Session, is_simulated: Optional[bool] = False) -> Dict[str, Any]:
+    """Retorna o estado consolidado da carteira (Real, Simulada ou Geral) com cotações a mercado."""
+    query = session.query(Position)
+    if is_simulated is not None:
+        query = query.filter_by(is_simulated=is_simulated)
+    positions = query.all()
 
     total_invested = 0.0
     current_market_value = 0.0
@@ -178,6 +191,7 @@ def get_portfolio_summary(session: Session) -> Dict[str, Any]:
             "trailing_stop": pos.trailing_stop,
             "strategy": pos.strategy,
             "entry_date": pos.entry_date.strftime("%d/%m/%Y") if pos.entry_date else "-",
+            "is_simulated": pos.is_simulated,
         })
 
     total_unrealized_pnl = current_market_value - total_invested
@@ -190,4 +204,5 @@ def get_portfolio_summary(session: Session) -> Dict[str, Any]:
         "total_unrealized_pnl": round(total_unrealized_pnl, 2),
         "total_unrealized_pnl_pct": round(total_unrealized_pnl_pct, 2),
         "num_positions": len(positions_data),
+        "is_simulated": is_simulated,
     }

@@ -1,5 +1,5 @@
 from datetime import datetime, date, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
 from b3pilot.ledger.db import Position
@@ -9,9 +9,12 @@ from b3pilot.core.strategies import compute_indicators
 from b3pilot.config import TIME_STOP_DAYS, ATR_TRAILING_MULTIPLIER, IFR2_TIME_STOP_DAYS
 
 
-def evaluate_open_positions_exits(session: Session) -> List[Dict[str, Any]]:
-    """Avalia todas as posições em custódia e identifica se alguma atingiu gatilho de VENDA."""
-    positions = session.query(Position).all()
+def evaluate_open_positions_exits(session: Session, is_simulated: Optional[bool] = None) -> List[Dict[str, Any]]:
+    """Avalia posições em custódia e identifica se alguma atingiu gatilho de VENDA."""
+    query = session.query(Position)
+    if is_simulated is not None:
+        query = query.filter_by(is_simulated=is_simulated)
+    positions = query.all()
     exit_signals = []
 
     for pos in positions:

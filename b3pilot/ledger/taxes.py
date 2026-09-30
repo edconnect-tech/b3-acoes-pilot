@@ -49,11 +49,12 @@ def recalculate_monthly_taxes(session: Session, year_month: str) -> MonthlyTaxRe
     """Recalcula integralmente o status tributário de um determinado mês."""
     year, month = map(int, year_month.split("-"))
 
-    # Busca todas as transações de VENDA ocorridas no mês
+    # Busca todas as transações de VENDA REAIS ocorridas no mês (ignora simulações)
     sells = (
         session.query(Transaction)
         .filter(
             Transaction.type == "SELL",
+            Transaction.is_simulated.is_(False),
             extract("year", Transaction.date) == year,
             extract("month", Transaction.date) == month,
         )

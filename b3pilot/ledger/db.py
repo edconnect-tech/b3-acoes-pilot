@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     Date,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
@@ -35,14 +36,18 @@ class Transaction(Base):
     realized_pnl = Column(Float, default=0.0)    # PnL líquido (preenchido na venda)
     strategy = Column(String(50), default="MANUAL")
     notes = Column(Text, nullable=True)
+    is_simulated = Column(Boolean, default=False, nullable=False, index=True)
 
 
 class Position(Base):
     """Posição ativa em custódia (carteira atual)."""
     __tablename__ = "positions"
+    __table_args__ = (
+        UniqueConstraint("ticker", "is_simulated", name="uix_ticker_simulated"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    ticker = Column(String(20), unique=True, nullable=False, index=True)
+    ticker = Column(String(20), nullable=False, index=True)
     quantity = Column(Integer, nullable=False)
     average_price = Column(Float, nullable=False)  # Preço Médio Ponderado oficial
     total_cost = Column(Float, nullable=False)     # average_price * quantity
@@ -52,6 +57,7 @@ class Position(Base):
     highest_price = Column(Float, nullable=True)   # Maior máxima desde a entrada
     strategy = Column(String(50), default="MANUAL")
     entry_date = Column(DateTime, default=datetime.utcnow)
+    is_simulated = Column(Boolean, default=False, nullable=False, index=True)
 
 
 class MonthlyTaxRecord(Base):
@@ -108,8 +114,17 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
-    """Cria as tabelas no SQLite se não existirem."""
+    """Cria as tabelas no SQLite se não existirem e aplica migrações de campos novos."""
     Base.metadata.create_all(bind=engine)
+    with engine.connect() as conn:
+        for tbl in ["transactions", "positions"]:
+            try:
+                cols = [c[1] for c in conn.exec_driver_sql(f"PRAGMA table_info({tbl})").fetchall()]
+                if "is_simulated" not in cols:
+                    conn.exec_driver_sql(f"ALTER TABLE {tbl} ADD COLUMN is_simulated BOOLEAN DEFAULT 0 NOT NULL")
+                    conn.commit()
+            except Exception:
+                pass
 
 
 def get_db_session() -> Session:
