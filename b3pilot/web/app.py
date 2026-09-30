@@ -909,54 +909,57 @@ elif menu == "➕ Registrar Ordem":
             else:
                 st.warning(f"Não foi possível obter cotação automática para `{base_typed}`. Você pode preencher os valores manualmente.")
 
-        with st.form("form_buy"):
-            st.markdown("##### Detalhes da Ordem de Compra")
-            f_col1, f_col2 = st.columns(2)
-            with f_col1:
-                qty = st.number_input("Quantidade de Ações", min_value=1, step=10, value=int(suggested_qty))
-                price = st.number_input("Preço de Execução (R$)", min_value=0.01, step=0.01, format="%.2f", value=float(default_price))
-                fees = st.number_input("Taxas e Emolumentos da B3 (R$)", min_value=0.0, step=0.10, value=1.50)
-            with f_col2:
-                stop_loss = st.number_input("Stop Loss (R$)", min_value=0.0, step=0.01, value=float(suggested_stop))
-                take_profit = st.number_input("Take Profit / Alvo (R$)", min_value=0.0, step=0.01, value=float(suggested_target))
-                strat_options = ["IFR2", "TREND", "DIVIDEND_COM", "MANUAL"]
-                strat_idx = strat_options.index(default_strategy) if default_strategy in strat_options else 0
-                strategy = st.selectbox("Estratégia", strat_options, index=strat_idx)
+        st.markdown("---")
+        st.markdown("##### Detalhes da Ordem de Compra")
+        f_col1, f_col2 = st.columns(2)
+        with f_col1:
+            qty = st.number_input("Quantidade de Ações", min_value=1, step=10, value=int(suggested_qty), key="buy_qty_input")
+            price = st.number_input("Preço de Execução (R$)", min_value=0.01, step=0.01, format="%.2f", value=float(default_price), key="buy_price_input")
+            fees = st.number_input("Taxas e Emolumentos da B3 (R$)", min_value=0.0, step=0.10, value=1.50, key="buy_fees_input")
+        with f_col2:
+            stop_loss = st.number_input("Stop Loss (R$)", min_value=0.0, step=0.01, value=float(suggested_stop), key="buy_stop_input")
+            take_profit = st.number_input("Take Profit / Alvo (R$)", min_value=0.0, step=0.01, value=float(suggested_target), key="buy_tp_input")
+            strat_options = ["IFR2", "TREND", "DIVIDEND_COM", "MANUAL"]
+            strat_idx = strat_options.index(default_strategy) if default_strategy in strat_options else 0
+            strategy = st.selectbox("Estratégia", strat_options, index=strat_idx, key="buy_strat_select")
 
-            notes = st.text_area("Notas / Justificativa da Entrada")
+        notes = st.text_area("Notas / Justificativa da Entrada", key="buy_notes_input")
 
-            submitted_buy = st.form_submit_button("Confirmar Compra", type="primary")
-            if submitted_buy:
-                if not base_typed:
-                    st.error("Informe o ticker da ação antes de confirmar.")
+        total_op_val = (price * qty) + fees
+        st.caption(f"💰 **Total da Operação:** {qty} ações @ R$ {price:.2f} + R$ {fees:.2f} taxas = **R$ {total_op_val:,.2f}**")
+
+        submitted_buy = st.button("🛒 Confirmar Compra", type="primary", key="btn_confirm_buy")
+        if submitted_buy:
+            if not base_typed:
+                st.error("Informe o ticker da ação antes de confirmar a compra.")
+            else:
+                submit_key = f"{base_typed}_{qty}_{price}_{is_sim_order}"
+                now_ts = time.time()
+                last_submit_key = st.session_state.get("last_submit_key")
+                last_submit_time = st.session_state.get("last_submit_time", 0.0)
+
+                if submit_key == last_submit_key and (now_ts - last_submit_time) < 4.0:
+                    st.warning("⚠️ Esta ordem acabou de ser processada! Evitamos um registro duplicado.")
                 else:
-                    submit_key = f"{base_typed}_{qty}_{price}_{is_sim_order}"
-                    now_ts = time.time()
-                    last_submit_key = st.session_state.get("last_submit_key")
-                    last_submit_time = st.session_state.get("last_submit_time", 0.0)
+                    st.session_state["last_submit_key"] = submit_key
+                    st.session_state["last_submit_time"] = now_ts
 
-                    if submit_key == last_submit_key and (now_ts - last_submit_time) < 4.0:
-                        st.warning("⚠️ Esta ordem acabou de ser processada! Evitamos um registro duplicado.")
-                    else:
-                        st.session_state["last_submit_key"] = submit_key
-                        st.session_state["last_submit_time"] = now_ts
-
-                        pos = execute_buy(
-                            session=session,
-                            ticker=base_typed,
-                            quantity=qty,
-                            price=price,
-                            fees=fees,
-                            stop_loss=stop_loss if stop_loss > 0 else None,
-                            take_profit=take_profit if take_profit > 0 else None,
-                            strategy=strategy,
-                            notes=notes,
-                            is_simulated=is_sim_order,
-                        )
-                        env_label = "Simulada (Paper Trading)" if is_sim_order else "Real"
-                        st.success(f"✓ Compra {env_label} registrada com sucesso! Posição atualizada para {pos.quantity} ações de {pos.ticker} a PM de R$ {pos.average_price:.2f}.")
-                        for k in ["order_ticker", "order_price", "order_stop", "order_target", "order_qty", "order_strategy"]:
-                            st.session_state.pop(k, None)
+                    pos = execute_buy(
+                        session=session,
+                        ticker=base_typed,
+                        quantity=qty,
+                        price=price,
+                        fees=fees,
+                        stop_loss=stop_loss if stop_loss > 0 else None,
+                        take_profit=take_profit if take_profit > 0 else None,
+                        strategy=strategy,
+                        notes=notes,
+                        is_simulated=is_sim_order,
+                    )
+                    env_label = "Simulada (Paper Trading)" if is_sim_order else "Real"
+                    st.success(f"✓ Compra {env_label} registrada com sucesso! Posição atualizada para {pos.quantity} ações de {pos.ticker} a PM de R$ {pos.average_price:.2f}.")
+                    for k in ["order_ticker", "order_price", "order_stop", "order_target", "order_qty", "order_strategy"]:
+                        st.session_state.pop(k, None)
 
     with tab_sell:
         positions = session.query(Position).filter_by(is_simulated=is_sim_mode).all()
@@ -964,27 +967,33 @@ elif menu == "➕ Registrar Ordem":
         if not positions:
             st.info(f"Nenhuma posição em custódia {env_label} disponível para venda.")
         else:
-            with st.form("form_sell"):
-                ticker_sell = st.selectbox("Selecione o Ativo em Custódia", [p.ticker for p in positions])
-                selected_pos = session.query(Position).filter_by(ticker=ticker_sell, is_simulated=is_sim_mode).first()
-                st.caption(f"Quantidade em custódia {env_label}: {selected_pos.quantity} | Preço Médio: R$ {selected_pos.average_price:.2f}")
+            ticker_sell = st.selectbox("Selecione o Ativo em Custódia", [p.ticker for p in positions], key="sell_pos_select")
+            selected_pos = session.query(Position).filter_by(ticker=ticker_sell, is_simulated=is_sim_mode).first()
+            st.caption(f"Quantidade em custódia {env_label}: {selected_pos.quantity} | Preço Médio: R$ {selected_pos.average_price:.2f}")
 
-                qty_sell = st.number_input("Quantidade a Vender", min_value=1, max_value=selected_pos.quantity, step=10, value=selected_pos.quantity)
-                price_sell = st.number_input("Preço de Venda (R$)", min_value=0.01, step=0.01, format="%.2f", value=selected_pos.average_price * 1.05)
-                fees_sell = st.number_input("Taxas e Emolumentos (R$)", min_value=0.0, step=0.10, value=1.50)
-                notes_sell = st.text_area("Notas do Encerramento")
+            s_col1, s_col2 = st.columns(2)
+            with s_col1:
+                qty_sell = st.number_input("Quantidade a Vender", min_value=1, max_value=selected_pos.quantity, step=10, value=selected_pos.quantity, key="sell_qty_input")
+                price_sell = st.number_input("Preço de Venda (R$)", min_value=0.01, step=0.01, format="%.2f", value=selected_pos.average_price * 1.05, key="sell_price_input")
+            with s_col2:
+                fees_sell = st.number_input("Taxas e Emolumentos (R$)", min_value=0.0, step=0.10, value=1.50, key="sell_fees_input")
+                notes_sell = st.text_area("Notas do Encerramento", key="sell_notes_input")
 
-                submitted_sell = st.form_submit_button("Confirmar Venda", type="primary")
-                if submitted_sell:
-                    res = execute_sell(
-                        session=session,
-                        ticker=ticker_sell,
-                        quantity=qty_sell,
-                        price=price_sell,
-                        fees=fees_sell,
-                        notes=notes_sell,
-                        is_simulated=is_sim_mode,
-                    )
-                    st.success(f"Venda {env_label} confirmada! PnL Líquido Realizado: R$ {res['realized_pnl']:,.2f} ({res['realized_pnl_pct']:+.2f}%).")
+            total_sell_val = (price_sell * qty_sell) - fees_sell
+            pnl_proj = (price_sell - selected_pos.average_price) * qty_sell - fees_sell
+            st.caption(f"💰 **Valor Líquido Previsto:** R$ {total_sell_val:,.2f} | PnL Líquido Estimado: R$ {pnl_proj:,.2f}")
+
+            submitted_sell = st.button("💰 Confirmar Venda", type="primary", key="btn_confirm_sell")
+            if submitted_sell:
+                res = execute_sell(
+                    session=session,
+                    ticker=ticker_sell,
+                    quantity=qty_sell,
+                    price=price_sell,
+                    fees=fees_sell,
+                    notes=notes_sell,
+                    is_simulated=is_sim_mode,
+                )
+                st.success(f"✓ Venda {env_label} confirmada! PnL Líquido Realizado: R$ {res['realized_pnl']:,.2f} ({res['realized_pnl_pct']:+.2f}%).")
 
 session.close()
