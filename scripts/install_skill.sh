@@ -16,9 +16,12 @@ description: |
   Assistente autônomo de Swing Trade, Proventos (Dividendos e JCP na Data COM) e Gestão Fiscal para ações da B3 (Brasil).
   Ative esta skill quando o usuário solicitar:
   - Análise ou situação atual da carteira de ações na B3.
-  - Varredura de mercado / scanner de compras (IFR2, Seguidor de Tendência, Momentum).
+  - Varredura de mercado / scanner concorrente de compras (IFR2 com stop dinâmico, Seguidor de Tendência, Retomada de Fundo / Pivôs).
+  - Consulta se deve COMPRAR, VENDER ou AGUARDAR determinada ação antes da abertura ou durante o pregão.
+  - Consulta de saídas obrigatórias (Stop Loss, Alvo, Trailing Stop e Time-Stop).
   - Consulta de calendário de dividendos, JCP e próximas Datas COM.
-  - Registro de ordens de compra ou venda de ações.
+  - Registro de ordens de compra ou venda de ações (reais ou simuladas).
+  - Auditoria de travas de baixa e estruturas com opções.
   - Cálculo de imposto de renda, apuração da isenção de R$ 20.000, compensação de prejuízos e emissão de DARF (Código 6015).
   - Abertura do dashboard visual no navegador.
 ---
