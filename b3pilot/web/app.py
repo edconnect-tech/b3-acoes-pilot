@@ -10,13 +10,21 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 
-from b3pilot.ledger.db import init_db, get_db_session, Transaction, Position, MonthlyTaxRecord, DividendRecord
-from b3pilot.ledger.portfolio import get_portfolio_summary, execute_buy, execute_sell, delete_transaction
+from b3pilot.ledger.db import init_db, get_db_session, Position, Transaction, MonthlyTaxRecord
+from b3pilot.ledger.portfolio import (
+    get_portfolio_summary,
+    execute_buy,
+    execute_sell,
+    execute_partial_sale,
+    simulate_partial_exit,
+    delete_transaction,
+)
 from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
 from b3pilot.core.strategies import compute_indicators
 from b3pilot.core.regime import analyze_market_regime
 from b3pilot.core.risk import audit_option_spread, calculate_position_size
+from b3pilot.core.chat import process_chat_query
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe, SMALL_MID_CAPS, BLUE_CHIPS
 from b3pilot.data.b3_feed import (
@@ -100,6 +108,7 @@ st.sidebar.markdown("**Assistente de Swing Trade & Proventos**")
 st.sidebar.markdown("---")
 MENU_OPTIONS = [
     "📊 Visão Geral da Carteira",
+    "💬 Assistente & Chat Operacional",
     "🎯 Radar de Oportunidades & Proventos",
     "🛡️ Auditoria de Travas de Baixa & Opções",
     "📈 Análise Gráfica & Variações (1D a 10A)",
@@ -137,19 +146,27 @@ regime = analyze_market_regime()
 reg_col1, reg_col2 = st.columns([3, 1])
 with reg_col1:
     if regime["status"] == "BULL":
-        st.markdown(f'<div class="badge-success" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:1px solid #10b981;">🟢 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="badge-success" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:1px solid #10b981;">🟢 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
     elif regime["status"] == "CORRECTION":
-        st.markdown(f'<div class="badge-warning" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:1px solid #f59e0b;">🟡 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="badge-warning" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:1px solid #f59e0b;">🟡 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
     elif regime["status"] == "BEAR":
-        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:1px solid #ef4444;">🔴 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:1px solid #ef4444;">🔴 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
     elif regime["status"] == "PANIC":
-        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:8px 12px; margin-bottom:14px; border:2px solid #b91c1c;">🚨 <b>PÂNICO NO IBOVESPA ({regime["ibov_change_pct"]}%)</b> — {regime["description"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:2px solid #b91c1c;">🚨 <b>PÂNICO NO IBOVESPA ({regime.get("ibov_change_pct", 0.0)}%)</b> — {regime["description"]}</div>', unsafe_allow_html=True)
     else:
         st.caption(f"Status IBOVESPA: {regime['name']}")
 
 with reg_col2:
     if regime.get("ibov_close"):
-        st.caption(f"IBOV: **R$ {regime['ibov_close']:,.0f}** ({regime['ibov_change_pct']:+.2f}%)")
+        st.markdown(
+            f"""
+            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px; font-size:0.85rem; text-align:right;">
+                <b>IBOV:</b> R$ {regime['ibov_close']:,.0f} ({regime['ibov_change_pct']:+.2f}%)<br/>
+                <b>5D:</b> {regime.get('ibov_change_5d_pct', 0.0):+.2f}% | <b>Risco:</b> {int(regime['allocation_multiplier']*100)}%
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 # ==========================================
 # 1. VISÃO GERAL DA CARTEIRA
@@ -194,11 +211,133 @@ if menu == "📊 Visão Geral da Carteira":
             "Stop Loss (R$)", "Alvo / Take Profit (R$)", "Trailing Stop (R$)", "Estratégia", "Data de Entrada"
         ]
         st.dataframe(df_pos, width="stretch")
+
+        with st.expander("⚡ Executar Realização Parcial (Scale-Out & Subir Stop)"):
+            st.markdown(
+                "Embolse lucro em 50% das ações e suba o Stop Loss das ações restantes para **eliminar 100% do risco** do trade."
+            )
+            part_col1, part_col2, part_col3, part_col4 = st.columns(4)
+            pos_tickers = [p["ticker"] for p in summary["positions"]]
+            with part_col1:
+                sel_part_tk = st.selectbox("Selecione o Ativo", pos_tickers, key="quick_part_tk")
+                target_p = next(p for p in summary["positions"] if p["ticker"] == sel_part_tk)
+                sugg_qty = max(1, target_p["quantity"] // 2) if target_p["quantity"] > 1 else 1
+            with part_col2:
+                exec_price = st.number_input("Preço de Venda (R$)", value=float(target_p["current_price"]), step=0.01, format="%.2f", key="quick_part_price")
+            with part_col3:
+                max_q = max(1, target_p["quantity"] - 1) if target_p["quantity"] > 1 else 1
+                part_qty = st.number_input("Qtd a Vender (50%)", min_value=1, max_value=max_q, value=min(sugg_qty, max_q), step=1, key="quick_part_qty")
+            with part_col4:
+                sugg_new_stop = float(target_p.get("new_stop_after_partial") or target_p["average_price"])
+                new_stop_val = st.number_input("Novo Stop Loss (R$)", value=sugg_new_stop, step=0.01, format="%.2f", key="quick_part_new_stop")
+
+            # Simulação ao vivo
+            if target_p["quantity"] > 1:
+                sim_live = simulate_partial_exit(session, sel_part_tk, target_price=exec_price, new_stop_loss=new_stop_val, partial_pct=(part_qty / target_p["quantity"]), is_simulated=is_sim_mode)
+                if "error" not in sim_live:
+                    st.caption(
+                        f"💰 **Lucro Embolsado Agora:** R$ {sim_live['realized_profit_half']:+,.2f} | "
+                        f"🛡️ **Lucro Mínimo Garantido no Pior Caso:** **R$ {sim_live['guaranteed_total_profit']:+,.2f}** ({sim_live['guaranteed_total_pct']:+.2f}%)"
+                    )
+
+            if st.button("🚀 Confirmar Realização Parcial", type="primary", key="btn_confirm_quick_part"):
+                try:
+                    res_part = execute_partial_sale(
+                        session=session,
+                        ticker=sel_part_tk,
+                        quantity=part_qty,
+                        price=exec_price,
+                        new_stop_loss=new_stop_val,
+                        is_simulated=is_sim_mode,
+                    )
+                    st.success(
+                        f"✓ Realização Parcial de {sel_part_tk} executada! "
+                        f"Lucro realizado de R$ {res_part['realized_pnl']:+,.2f} e novo stop cadastrado em R$ {res_part['new_stop_loss']:.2f}."
+                    )
+                    st.markdown("**📋 Roteiro de Execução no Home Broker da sua Corretora:**")
+                    for step in res_part["broker_instructions"]:
+                        st.markdown(f"- {step}")
+                except Exception as e:
+                    st.error(f"Erro ao processar parcial: {e}")
     else:
         st.info("Nenhuma ação em custódia no momento. Use o menu 'Registrar Ordem' para cadastrar sua primeira compra.")
 
 # ==========================================
-# 2. RADAR DE OPORTUNIDADES & PROVENTOS
+# 2. CHAT & ASSISTENTE OPERACIONAL
+# ==========================================
+elif menu == "💬 Assistente & Chat Operacional":
+    env_title = "🧪 Laboratório de Simulação" if is_sim_mode else "💼 Custódia Real"
+    st.title(f"💬 Assistente & Chat Operacional — {env_title}")
+    st.markdown(
+        "Consulte em tempo real se é momento de **comprar**, **vender** ou **aguardar** determinada ação na B3. "
+        "A análise cruza automaticamente o Regime do IBOVESPA, indicadores técnicos (IFR2, Médias, ATR, Range 52S) "
+        "e a sua carteira atual."
+    )
+
+    # Inicializa histórico de mensagens no session_state
+    if "chat_messages" not in st.session_state:
+        st.session_state["chat_messages"] = [
+            {
+                "role": "assistant",
+                "content": (
+                    "Olá! Sou o seu **Assistente Operacional da B3**.\n\n"
+                    "Posso te ajudar a decidir antes de abrir uma ordem. Você pode me perguntar:\n"
+                    "• *\"Posso comprar PETR4 agora?\"*\n"
+                    "• *\"Vale a pena vender VALE3 hoje?\"*\n"
+                    "• *\"Como está o IBOVESPA hoje?\"*\n"
+                    "• *\"Devo vender alguma posição da minha carteira?\"*\n\n"
+                    "Qual ativo ou estratégia você quer analisar?"
+                ),
+            }
+        ]
+
+    # Sugestões rápidas de perguntas (chips clicáveis)
+    st.markdown("**Perguntas Frequentes / Ações Rápidas:**")
+    quick_cols = st.columns(4)
+    with quick_cols[0]:
+        if st.button("📊 Como está o IBOVESPA?", key="btn_q_ibov", use_container_width=True):
+            st.session_state["chat_messages"].append({"role": "user", "content": "Como está o IBOVESPA hoje?"})
+            ans = process_chat_query("Como está o IBOVESPA hoje?", session, is_simulated=is_sim_mode)
+            st.session_state["chat_messages"].append({"role": "assistant", "content": ans})
+            st.rerun()
+    with quick_cols[1]:
+        if st.button("🛡️ Devo vender algo?", key="btn_q_exits", use_container_width=True):
+            st.session_state["chat_messages"].append({"role": "user", "content": "Devo vender alguma ação da minha carteira?"})
+            ans = process_chat_query("Devo vender alguma ação da minha carteira?", session, is_simulated=is_sim_mode)
+            st.session_state["chat_messages"].append({"role": "assistant", "content": ans})
+            st.rerun()
+    with quick_cols[2]:
+        if st.button("🎯 Melhores Compras Agora", key="btn_q_buys", use_container_width=True):
+            st.session_state["chat_messages"].append({"role": "user", "content": "Quais são as melhores oportunidades de compra no radar?"})
+            ans = process_chat_query("Quais são as melhores oportunidades de compra no radar?", session, is_simulated=is_sim_mode)
+            st.session_state["chat_messages"].append({"role": "assistant", "content": ans})
+            st.rerun()
+    with quick_cols[3]:
+        if st.button("🗑️ Limpar Chat", key="btn_clear_chat", use_container_width=True):
+            st.session_state["chat_messages"] = []
+            st.rerun()
+
+    st.markdown("---")
+
+    # Renderiza mensagens anteriores
+    for msg in st.session_state["chat_messages"]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    # Input do chat
+    if prompt := st.chat_input("Digite sua dúvida (ex: Posso comprar PETR4? ou Analisar VALE3)..."):
+        st.session_state["chat_messages"].append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Analisando dados técnicos e regime de mercado..."):
+                response = process_chat_query(prompt, session, is_simulated=is_sim_mode)
+                st.markdown(response)
+        st.session_state["chat_messages"].append({"role": "assistant", "content": response})
+
+# ==========================================
+# 3. RADAR DE OPORTUNIDADES & PROVENTOS
 # ==========================================
 elif menu == "🎯 Radar de Oportunidades & Proventos":
     st.title("Radar de Oportunidades & Calendário de Proventos")
@@ -228,6 +367,7 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                     "🌟 Todas as Estratégias",
                     "🟢 Comprar na Baixa / Queda (Reversão IFR2)",
                     "🚀 Comprar na Força / Rompimento (Momentum)",
+                    "🎯 Retomada de Fundo (Pivô Concluído)",
                     "💰 Captura de Proventos (Pré-Data COM)",
                 ],
                 index=0,
@@ -258,7 +398,8 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 - **Código da Ação (Ticker):** Código de negociação do ativo na B3 (ex: PETR4, KEPL3, WEGE3).
                 - **Setup (Estratégia):** Padrão matemático detectado:
                   - *Reversão à Média (IFR2):* Correção aguda em papel que está em tendência primária de alta (alta taxa de acerto de 65-75%).
-                  - *Seguidor de Tendência (Momentum):* Rompimento ou repique em médias móveis alinhadas (alto ganho assimétrico de 2.5R a 5R).
+                  - *Seguidor de Tendência (Momentum):* Rompimento ou repique em médias móveis alinhadas no Sweet Spot (ampla pista livre até a máxima).
+                  - *Retomada de Fundo (Pivô Concluído):* Conclusão de suporte / fundo duplo com superação da EMA 9 em ativos defasados (alta assimetria).
                   - *Captura Pré-Data COM:* Compra programada dias antes do corte de proventos em ativo com suporte técnico.
                 - **Nota de Confluência (Score 0 a 10):** Grau de alinhamento simultâneo entre tendência, volume financeiro, sobrevenda/rompimento e assimetria. Notas $\ge 8.0$ representam alta convicção.
                 - **Preço Entrada Ref. (R$):** Preço de referência do último fechamento para tomada de decisão no pregão.
@@ -285,6 +426,8 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
             results = [r for r in results if r["strategy"] == "IFR2"]
         elif "Comprar na Força" in strategy_style:
             results = [r for r in results if r["strategy"] == "TREND"]
+        elif "Retomada de Fundo" in strategy_style:
+            results = [r for r in results if r["strategy"] == "REVERSAL_PIVOT"]
         elif "Captura de Proventos" in strategy_style:
             results = [r for r in results if r["strategy"] == "DIVIDEND_COM"]
 
@@ -299,6 +442,8 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 cap_val = r.get("suggested_capital", shares_val * r["entry_price"])
                 adtv_val = f"R$ {r.get('adtv_milhoes', 0):.1f}M" if "adtv_milhoes" in r else "-"
 
+                range_52s_str = f"{r.get('range_52w_pct', 0):.0f}% (Topo: R$ {r.get('high_52w', 0):.2f})" if "range_52w_pct" in r else "-"
+
                 table_rows.append({
                     "Código da Ação": r["ticker"],
                     "Setup (Estratégia)": r["name"],
@@ -307,6 +452,7 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                     "Stop Loss (R$)": f"R$ {r['stop_loss']:.2f}",
                     "Alvo de Lucro (R$)": f"R$ {r['take_profit']:.2f}",
                     "Relação R/R": f"{r.get('rr_ratio', 'N/A')}x",
+                    "Posição 52S": range_52s_str,
                     "Lote Sugerido (2% Risco)": f"{shares_val} ações",
                     "Capital Alocado": f"R$ {cap_val:,.2f}",
                     "ADTV 21": adtv_val,
@@ -886,7 +1032,12 @@ elif menu == "➕ Registrar Ordem":
                     else:
                         suggested_stop = round(live_price * 0.95, 2)
                         suggested_target = round(live_price * 1.10, 2)
-                    suggested_qty = calculate_position_size(DEFAULT_CAPITAL, live_price, suggested_stop)
+                    sizing = calculate_position_size(
+                        entry_price=live_price,
+                        stop_loss=suggested_stop,
+                        capital=DEFAULT_CAPITAL,
+                    )
+                    suggested_qty = max(1, int(sizing.get("shares", 100)))
 
                 inf1, inf2, inf3, inf4 = st.columns(4)
                 with inf1:
@@ -913,15 +1064,32 @@ elif menu == "➕ Registrar Ordem":
         st.markdown("##### Detalhes da Ordem de Compra")
         f_col1, f_col2 = st.columns(2)
         with f_col1:
-            qty = st.number_input("Quantidade de Ações", min_value=1, step=10, value=int(suggested_qty), key="buy_qty_input")
+            if isinstance(suggested_qty, dict):
+                suggested_qty = suggested_qty.get("shares", 100)
+            try:
+                safe_qty_value = max(1, int(suggested_qty))
+            except (ValueError, TypeError):
+                safe_qty_value = 100
+
+            qty = st.number_input("Quantidade de Ações", min_value=1, step=10, value=safe_qty_value, key="buy_qty_input")
             price = st.number_input("Preço de Execução (R$)", min_value=0.01, step=0.01, format="%.2f", value=float(default_price), key="buy_price_input")
             fees = st.number_input("Taxas e Emolumentos da B3 (R$)", min_value=0.0, step=0.10, value=1.50, key="buy_fees_input")
         with f_col2:
             stop_loss = st.number_input("Stop Loss (R$)", min_value=0.0, step=0.01, value=float(suggested_stop), key="buy_stop_input")
             take_profit = st.number_input("Take Profit / Alvo (R$)", min_value=0.0, step=0.01, value=float(suggested_target), key="buy_tp_input")
-            strat_options = ["IFR2", "TREND", "DIVIDEND_COM", "MANUAL"]
+            strat_options = ["IFR2", "TREND", "REVERSAL_PIVOT", "DIVIDEND_COM", "MANUAL"]
             strat_idx = strat_options.index(default_strategy) if default_strategy in strat_options else 0
             strategy = st.selectbox("Estratégia", strat_options, index=strat_idx, key="buy_strat_select")
+
+        with st.expander("🎯 Plano de Realização Parcial (Opcional - Scale-Out & Trailing)", expanded=False):
+            st.caption("Defina o gatilho para realizar 50% dos lucros e subir o stop das ações restantes.")
+            col_p1, col_p2, col_p3 = st.columns(3)
+            with col_p1:
+                part_target_in = st.number_input("Alvo da Parcial / TP1 (R$)", min_value=0.0, step=0.01, format="%.2f", value=0.0, key="buy_part_target")
+            with col_p2:
+                part_qty_in = st.number_input("Qtd da Parcial", min_value=0, step=1, value=int(qty // 2) if qty > 1 else 0, key="buy_part_qty")
+            with col_p3:
+                new_stop_in = st.number_input("Novo Stop pós-parcial (R$)", min_value=0.0, step=0.01, format="%.2f", value=0.0, key="buy_new_stop_part")
 
         notes = st.text_area("Notas / Justificativa da Entrada", key="buy_notes_input")
 
@@ -952,6 +1120,9 @@ elif menu == "➕ Registrar Ordem":
                         fees=fees,
                         stop_loss=stop_loss if stop_loss > 0 else None,
                         take_profit=take_profit if take_profit > 0 else None,
+                        partial_target=part_target_in if part_target_in > 0 else None,
+                        partial_quantity=part_qty_in if part_qty_in > 0 else None,
+                        new_stop_after_partial=new_stop_in if new_stop_in > 0 else None,
                         strategy=strategy,
                         notes=notes,
                         is_simulated=is_sim_order,
@@ -979,21 +1150,44 @@ elif menu == "➕ Registrar Ordem":
                 fees_sell = st.number_input("Taxas e Emolumentos (R$)", min_value=0.0, step=0.10, value=1.50, key="sell_fees_input")
                 notes_sell = st.text_area("Notas do Encerramento", key="sell_notes_input")
 
+            is_partial = qty_sell < selected_pos.quantity
+            new_stop_for_sell = None
+            if is_partial:
+                st.info(f"💡 **Venda Parcial Detectada:** Você está vendendo {qty_sell} de {selected_pos.quantity} ações.")
+                sugg_st = selected_pos.new_stop_after_partial or selected_pos.average_price
+                new_stop_for_sell = st.number_input("Novo Stop Loss para as ações restantes (R$)", value=float(sugg_st), step=0.01, format="%.2f", key="sell_new_stop_in")
+
             total_sell_val = (price_sell * qty_sell) - fees_sell
             pnl_proj = (price_sell - selected_pos.average_price) * qty_sell - fees_sell
             st.caption(f"💰 **Valor Líquido Previsto:** R$ {total_sell_val:,.2f} | PnL Líquido Estimado: R$ {pnl_proj:,.2f}")
 
             submitted_sell = st.button("💰 Confirmar Venda", type="primary", key="btn_confirm_sell")
             if submitted_sell:
-                res = execute_sell(
-                    session=session,
-                    ticker=ticker_sell,
-                    quantity=qty_sell,
-                    price=price_sell,
-                    fees=fees_sell,
-                    notes=notes_sell,
-                    is_simulated=is_sim_mode,
-                )
-                st.success(f"✓ Venda {env_label} confirmada! PnL Líquido Realizado: R$ {res['realized_pnl']:,.2f} ({res['realized_pnl_pct']:+.2f}%).")
+                if is_partial:
+                    res = execute_partial_sale(
+                        session=session,
+                        ticker=ticker_sell,
+                        quantity=qty_sell,
+                        price=price_sell,
+                        new_stop_loss=new_stop_for_sell,
+                        fees=fees_sell,
+                        notes=notes_sell,
+                        is_simulated=is_sim_mode,
+                    )
+                    st.success(f"✓ Realização Parcial {env_label} confirmada! Lucro realizado: R$ {res['realized_pnl']:,.2f} ({res['realized_pnl_pct']:+.2f}%).")
+                    st.markdown("**📋 Roteiro de Execução no Home Broker:**")
+                    for step in res["broker_instructions"]:
+                        st.markdown(f"- {step}")
+                else:
+                    res = execute_sell(
+                        session=session,
+                        ticker=ticker_sell,
+                        quantity=qty_sell,
+                        price=price_sell,
+                        fees=fees_sell,
+                        notes=notes_sell,
+                        is_simulated=is_sim_mode,
+                    )
+                    st.success(f"✓ Venda {env_label} confirmada! PnL Líquido Realizado: R$ {res['realized_pnl']:,.2f} ({res['realized_pnl_pct']:+.2f}%).")
 
 session.close()

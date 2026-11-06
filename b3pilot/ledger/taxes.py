@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 
-from b3pilot.ledger.db import Transaction, MonthlyTaxRecord
+from b3pilot.ledger.db import Transaction, MonthlyTaxRecord, naive_utc_now
 from b3pilot.config import (
     TAX_EXEMPTION_LIMIT_MONTHLY,
     TAX_RATE_SWING_TRADE,
@@ -129,7 +129,7 @@ def recalculate_monthly_taxes(session: Session, year_month: str) -> MonthlyTaxRe
 
 def get_current_tax_summary(session: Session) -> Dict[str, Any]:
     """Retorna um resumo fiscal consolidado do mês atual."""
-    current_ym = datetime.utcnow().strftime("%Y-%m")
+    current_ym = naive_utc_now().strftime("%Y-%m")
     record = recalculate_monthly_taxes(session, current_ym)
 
     return {

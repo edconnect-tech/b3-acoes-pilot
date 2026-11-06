@@ -119,7 +119,17 @@ def test_market_regime_classification_synthetic():
     assert reg_panic["status"] == "PANIC"
     assert reg_panic["allow_momentum"] is False
     assert reg_panic["allow_ifr2"] is False
+    assert reg_panic["allow_reversal"] is False
     assert reg_panic["allocation_multiplier"] == 0.0
+
+    # 2b. Série com sangria semanal contínua (-6% em 5 dias e sobrevenda)
+    df_panic_week = df_bull.copy()
+    for j in range(1, 6):
+        df_panic_week.loc[df_panic_week.index[-j], "Close"] = df_panic_week["Close"].iloc[-j-1] * 0.985
+    reg_panic_week = analyze_market_regime(df_panic_week)
+    if reg_panic_week["ibov_rsi14"] <= 25.0:
+        assert reg_panic_week["status"] == "PANIC"
+        assert reg_panic_week["allow_reversal"] is False
 
     # 3. Série simulada em Bear Market (cotação abaixo da SMA 200)
     prices_bear = [150000 - (i * 250) for i in range(250)]

@@ -35,6 +35,7 @@ def analyze_market_regime(df_ibov: Optional[pd.DataFrame] = None) -> Dict[str, A
             "ema_21": None,
             "allow_momentum": True,
             "allow_ifr2": True,
+            "allow_reversal": True,
             "allow_dividends": True,
             "allocation_multiplier": 1.0,
             "description": "Feed do IBOVESPA indisponível no momento; operando em modo neutro padrão.",
@@ -44,6 +45,7 @@ def analyze_market_regime(df_ibov: Optional[pd.DataFrame] = None) -> Dict[str, A
     data["SMA_200"] = ta.sma(data["Close"], length=min(200, len(data)))
     data["EMA_9"] = ta.ema(data["Close"], length=9)
     data["EMA_21"] = ta.ema(data["Close"], length=21)
+    data["RSI_14"] = ta.rsi(data["Close"], length=14)
 
     last = data.iloc[-1]
     prev = data.iloc[-2]
@@ -52,25 +54,39 @@ def analyze_market_regime(df_ibov: Optional[pd.DataFrame] = None) -> Dict[str, A
     prev_close = float(prev["Close"])
     change_pct = round(((close - prev_close) / prev_close) * 100, 2)
 
+    # Variação acumulada de 5 pregões (1 semana de negociação)
+    close_5d_ago = float(data["Close"].iloc[-6]) if len(data) >= 6 else prev_close
+    change_5d_pct = round(((close - close_5d_ago) / close_5d_ago) * 100, 2)
+
     sma200 = float(last["SMA_200"]) if pd.notna(last["SMA_200"]) else close
     ema9 = float(last["EMA_9"]) if pd.notna(last["EMA_9"]) else close
     ema21 = float(last["EMA_21"]) if pd.notna(last["EMA_21"]) else close
+    rsi14 = float(last["RSI_14"]) if "RSI_14" in last and pd.notna(last["RSI_14"]) else 50.0
 
-    # 1. Checagem de Pânico Sistêmico
-    if change_pct <= -2.5:
+    # 1. Checagem de Pânico Sistêmico (Queda diária aguda <= -2.5% OU queda semanal severa <= -5.0% com IFR14 <= 25.0)
+    is_panic = (change_pct <= -2.5) or (change_5d_pct <= -5.0 and rsi14 <= 25.0)
+    if is_panic:
+        panic_reason = (
+            f"Queda abrupta de {change_pct}% no dia."
+            if change_pct <= -2.5
+            else f"Queda semanal severa de {change_5d_pct}% com IFR14 em {rsi14:.1f}."
+        )
         return {
             "status": "PANIC",
             "name": "PÂNICO / QUEDA SISTÊMICA",
             "ibov_close": round(close, 2),
             "ibov_change_pct": change_pct,
+            "ibov_change_5d_pct": change_5d_pct,
+            "ibov_rsi14": round(rsi14, 1),
             "sma_200": round(sma200, 2),
             "ema_9": round(ema9, 2),
             "ema_21": round(ema21, 2),
             "allow_momentum": False,
             "allow_ifr2": False,
+            "allow_reversal": False,
             "allow_dividends": False,
             "allocation_multiplier": 0.0,
-            "description": f"Queda abrupta de {change_pct}% no IBOVESPA. Modo de preservação total de capital: compras bloqueadas.",
+            "description": f"{panic_reason} Modo de preservação total de capital: novas compras bloqueadas.",
         }
 
     # 2. Tendência de Baixa Estrutural (Bear Market)
@@ -80,11 +96,14 @@ def analyze_market_regime(df_ibov: Optional[pd.DataFrame] = None) -> Dict[str, A
             "name": "BEAR MARKET (TENDÊNCIA DE BAIXA)",
             "ibov_close": round(close, 2),
             "ibov_change_pct": change_pct,
+            "ibov_change_5d_pct": change_5d_pct,
+            "ibov_rsi14": round(rsi14, 1),
             "sma_200": round(sma200, 2),
             "ema_9": round(ema9, 2),
             "ema_21": round(ema21, 2),
             "allow_momentum": False,
-            "allow_ifr2": True,  # Apenas sobrevenda extrema
+            "allow_ifr2": True,  # Apenas sobrevenda extrema (IFR2 <= 5)
+            "allow_reversal": True,  # Retomada de fundo confirmada com lote reduzido
             "allow_dividends": False,
             "allocation_multiplier": 0.50,  # Reduz exposição para 50%
             "description": f"IBOV (R$ {close:,.0f}) abaixo da SMA 200 (R$ {sma200:,.0f}). Compras de tendência suspensas; apenas repiques extremos autorizados com lote reduzido.",
@@ -97,14 +116,17 @@ def analyze_market_regime(df_ibov: Optional[pd.DataFrame] = None) -> Dict[str, A
             "name": "CORREÇÃO TÉCNICA (PULLBACK)",
             "ibov_close": round(close, 2),
             "ibov_change_pct": change_pct,
+            "ibov_change_5d_pct": change_5d_pct,
+            "ibov_rsi14": round(rsi14, 1),
             "sma_200": round(sma200, 2),
             "ema_9": round(ema9, 2),
             "ema_21": round(ema21, 2),
             "allow_momentum": False,
             "allow_ifr2": True,
+            "allow_reversal": True,
             "allow_dividends": True,
             "allocation_multiplier": 0.75,
-            "description": f"IBOV sustentado acima da SMA 200, porém com médias curtas cruzadas para baixo. Cenário ideal para reversão à média (IFR2).",
+            "description": f"IBOV sustentado acima da SMA 200, porém com médias curtas cruzadas para baixo. Cenário ideal para reversão à média (IFR2) e pivôs de retração.",
         }
 
     # 4. Bull Market Pleno
@@ -113,11 +135,14 @@ def analyze_market_regime(df_ibov: Optional[pd.DataFrame] = None) -> Dict[str, A
         "name": "BULL MARKET (TENDÊNCIA DE ALTA)",
         "ibov_close": round(close, 2),
         "ibov_change_pct": change_pct,
+        "ibov_change_5d_pct": change_5d_pct,
+        "ibov_rsi14": round(rsi14, 1),
         "sma_200": round(sma200, 2),
         "ema_9": round(ema9, 2),
         "ema_21": round(ema21, 2),
         "allow_momentum": True,
         "allow_ifr2": True,
+        "allow_reversal": True,
         "allow_dividends": True,
         "allocation_multiplier": 1.0,
         "description": f"IBOV altista acima da SMA 200 e com médias alinhadas (EMA 9 > EMA 21). Todos os setups operando com 100% de alocação.",

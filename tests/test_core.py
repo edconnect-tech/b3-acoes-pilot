@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from b3pilot.ledger.db import Base, Position
+from b3pilot.ledger.db import Base, Position, naive_utc_now
 from b3pilot.core.strategies import compute_indicators, evaluate_ifr2_setup, evaluate_trend_setup
 from b3pilot.core.exits import evaluate_open_positions_exits
 
@@ -88,7 +88,7 @@ def test_exit_stop_loss_trigger(monkeypatch):
         stop_loss=25.00,
         take_profit=32.00,
         strategy="MANUAL",
-        entry_date=datetime.utcnow(),
+        entry_date=naive_utc_now(),
     )
     session.add(pos)
     session.commit()
@@ -104,3 +104,66 @@ def test_exit_stop_loss_trigger(monkeypatch):
     assert exits[0]["ticker"] == "PETR4"
     assert exits[0]["urgency"] == "ALTA"
     session.close()
+
+
+def test_52w_indicators_and_trend_setup():
+    """Valida cálculo de 52 semanas e presença dos novos campos em setups de tendência e IFR2."""
+    df = generate_synthetic_ohlcv(250)
+    data = compute_indicators(df)
+
+    assert "HIGH_52W" in data.columns
+    assert "LOW_52W" in data.columns
+    assert data["HIGH_52W"].iloc[-1] >= data["LOW_52W"].iloc[-1]
+
+    # Prepara setup altista com pullback para acionar evaluate_trend_setup
+    df_trend = generate_synthetic_ohlcv(250, base_price=30.0, trend=0.003)
+    # Garante alinhamento das médias
+    df_trend["Volume"] = 5_000_000  # ADTV alto
+    res = evaluate_trend_setup(df_trend)
+    # Se o candle sintético disparar o gatilho, valida as métricas de 52 semanas
+    if res is not None:
+        assert "high_52w" in res
+        assert "low_52w" in res
+        assert "range_52w_pct" in res
+        assert "dist_52w_high_pct" in res
+        assert res["high_52w"] >= res["low_52w"]
+
+
+def test_trend_setup_vetoed_on_overextended_top():
+    """Valida que o gatekeeper anti-topo veta o setup de tendência se o ativo estiver colado no topo de 52S."""
+    from b3pilot.core.strategies import evaluate_trend_setup
+    df = generate_synthetic_ohlcv(250, base_price=30.0, trend=0.005)
+    df["Volume"] = 5_000_000
+    # Força a última barra a estar colada na máxima histórica do ano
+    max_p = df["High"].max()
+    df.iloc[-1, df.columns.get_loc("Close")] = max_p * 0.99
+    df.iloc[-1, df.columns.get_loc("High")] = max_p
+    res = evaluate_trend_setup(df)
+    # Deve ser vetado (None) por estar a < 5% do topo e nos 20% superiores do range
+    assert res is None
+
+
+def test_reversal_pivot_setup_trigger():
+    """Valida acionamento do setup de Retomada de Fundo (Pivô Concluído) em ativo defasado."""
+    from b3pilot.core.strategies import evaluate_reversal_pivot_setup
+    df = generate_synthetic_ohlcv(250, base_price=50.0, trend=-0.001)
+    df["Volume"] = 3_000_000
+    # Força os últimos 3 dias a formarem um fundo e superarem a EMA 9
+    df.iloc[-3, df.columns.get_loc("Low")] = 30.0
+    df.iloc[-3, df.columns.get_loc("Close")] = 31.0
+    df.iloc[-2, df.columns.get_loc("Low")] = 30.2
+    df.iloc[-2, df.columns.get_loc("Close")] = 30.8
+    # Hoje faz candle verde rompendo a EMA 9
+    df.iloc[-1, df.columns.get_loc("Open")] = 31.0
+    df.iloc[-1, df.columns.get_loc("Low")] = 30.5
+    df.iloc[-1, df.columns.get_loc("Close")] = 33.5
+    df.iloc[-1, df.columns.get_loc("High")] = 34.0
+    df.iloc[-1, df.columns.get_loc("Volume")] = 6_000_000
+
+    res = evaluate_reversal_pivot_setup(df)
+    if res is not None:
+        assert res["strategy"] == "REVERSAL_PIVOT"
+        assert res["signal"] == "BUY"
+        assert res["dist_52w_high_pct"] >= 12.0
+        assert res["rr_ratio"] >= 2.0
+

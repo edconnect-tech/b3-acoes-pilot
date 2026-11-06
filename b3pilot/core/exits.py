@@ -2,7 +2,7 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
-from b3pilot.ledger.db import Position
+from b3pilot.ledger.db import Position, naive_utc_now
 from b3pilot.data.b3_feed import fetch_ticker_data, fetch_latest_price, get_clean_ticker
 from b3pilot.data.dividends_feed import get_ticker_dividend_calendar
 from b3pilot.core.strategies import compute_indicators
@@ -72,6 +72,36 @@ def evaluate_open_positions_exits(session: Session, is_simulated: Optional[bool]
             })
             continue
 
+        # 3.5. Checagem de Alvo de Realização Parcial (TP1)
+        if (
+            pos.partial_target
+            and not pos.is_partial_executed
+            and current_price >= pos.partial_target
+        ):
+            qty_part = pos.partial_quantity or (pos.quantity // 2 if pos.quantity > 1 else 1)
+            rem_qty = pos.quantity - qty_part
+            new_stop = pos.new_stop_after_partial or pos.average_price
+            exit_signals.append({
+                "ticker": ticker,
+                "type": "PARTIAL_TAKE_PROFIT",
+                "urgency": "ALTA",
+                "price": current_price,
+                "trigger_price": pos.partial_target,
+                "strategy": pos.strategy,
+                "quantity": pos.quantity,
+                "partial_quantity": qty_part,
+                "remaining_quantity": rem_qty,
+                "new_stop": new_stop,
+                "entry_price": pos.average_price,
+                "pnl_pct": round(((current_price - pos.average_price) / pos.average_price) * 100, 2),
+                "reason": (
+                    f"🎯 ALVO PARCIAL ATINGIDO: Cotação bateu R$ {current_price:.2f} (Alvo: R$ {pos.partial_target:.2f}). "
+                    f"Roteiro: 1. Cancele o stop de {pos.quantity} ações; 2. Venda {qty_part} ações a mercado; "
+                    f"3. Cadastre novo stop de {rem_qty} ações em R$ {new_stop:.2f}."
+                ),
+            })
+            continue
+
         # 4. Checagem de Take Profit (Alvo Final)
         if pos.take_profit and current_price >= pos.take_profit:
             exit_signals.append({
@@ -89,7 +119,7 @@ def evaluate_open_positions_exits(session: Session, is_simulated: Optional[bool]
             continue
 
         # 5. Saída específica do setup IFR2 (Máxima dos últimos 2 dias ou Time-Stop de 5 pregões)
-        days_in_trade = (datetime.utcnow() - pos.entry_date).days
+        days_in_trade = (naive_utc_now() - pos.entry_date).days if pos.entry_date else 0
         if pos.strategy == "IFR2":
             high_2d = float(last["HIGH_2D"]) if pd_not_na(last["HIGH_2D"]) else None
             if high_2d and current_price >= high_2d:

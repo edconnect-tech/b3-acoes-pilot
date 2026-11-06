@@ -11,14 +11,16 @@ from rich.table import Table
 from rich.panel import Panel
 
 from b3pilot.ledger.db import init_db, get_db_session
-from b3pilot.ledger.portfolio import execute_buy, execute_sell, get_portfolio_summary
+from b3pilot.ledger.portfolio import execute_buy, execute_sell, execute_partial_sale, get_portfolio_summary
 from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
 from b3pilot.core.regime import analyze_market_regime
 from b3pilot.core.risk import audit_option_spread
+from b3pilot.core.chat import process_chat_query
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe
 from b3pilot.alerts.morning_job import run_morning_routine
+from b3pilot.alerts.price_watcher import run_intraday_price_watcher
 from b3pilot.alerts.notifier import send_telegram_message, send_macos_notification
 from b3pilot.config import PROJECT_ROOT
 
@@ -116,6 +118,7 @@ def scan(
     table.add_column("Stop Loss", justify="right")
     table.add_column("Alvo", justify="right")
     table.add_column("R/R", justify="center")
+    table.add_column("Range 52S", justify="center")
     table.add_column("Lote Sug.", justify="right")
     table.add_column("ADTV 21", justify="right")
     table.add_column("Justificativa Técnica")
@@ -123,6 +126,7 @@ def scan(
     for r in results:
         adtv_txt = f"R$ {r.get('adtv_milhoes', 0):.1f}M" if "adtv_milhoes" in r else "-"
         shares_txt = f"{r.get('suggested_shares', '-')} ações" if "suggested_shares" in r else "-"
+        range_52s_txt = f"{r.get('range_52w_pct', 0):.0f}%" if "range_52w_pct" in r else "-"
         table.add_row(
             r["ticker"],
             r["name"],
@@ -131,6 +135,7 @@ def scan(
             f"R$ {r['stop_loss']:.2f}",
             f"R$ {r['take_profit']:.2f}",
             f"{r.get('rr_ratio', 'N/A')}x",
+            range_52s_txt,
             shares_txt,
             adtv_txt,
             r["reason"],
@@ -182,9 +187,13 @@ def buy(
     price: float = typer.Argument(..., help="Preço unitário pago (R$)"),
     fees: float = typer.Option(1.50, "--fees", "-f", help="Taxas de corretagem e emolumentos B3 (R$)"),
     stop: Optional[float] = typer.Option(None, "--stop", "-s", help="Preço de Stop Loss"),
-    target: Optional[float] = typer.Option(None, "--target", "-t", help="Preço de Take Profit"),
+    target: Optional[float] = typer.Option(None, "--target", "-t", help="Preço de Take Profit Final (TP2)"),
+    tp1: Optional[float] = typer.Option(None, "--tp1", help="Preço de Realização Parcial (TP1)"),
+    tp1_qty: Optional[int] = typer.Option(None, "--tp1-qty", help="Quantidade de ações para realização parcial"),
+    new_stop_after_partial: Optional[float] = typer.Option(None, "--new-stop-after-partial", help="Novo Stop Loss após a realização parcial"),
     strategy: str = typer.Option("MANUAL", "--strategy", help="Estratégia (IFR2, TREND, DIVIDEND_COM, MANUAL)"),
     notes: Optional[str] = typer.Option(None, "--notes", "-n", help="Notas ou justificativa"),
+    simulated: bool = typer.Option(False, "--simulated", "-s", help="Registrar no Laboratório de Simulação (Paper Trading)"),
 ):
     """Registra uma ordem de COMPRA, atualizando a custódia e o Preço Médio oficial."""
     init_db()
@@ -197,16 +206,26 @@ def buy(
         fees=fees,
         stop_loss=stop,
         take_profit=target,
+        partial_target=tp1,
+        partial_quantity=tp1_qty,
+        new_stop_after_partial=new_stop_after_partial,
         strategy=strategy,
         notes=notes,
+        is_simulated=simulated,
     )
     session.close()
 
+    env_tag = " [bold magenta](SIMULAÇÃO)[/bold magenta]" if simulated else ""
     console.print(
-        f"[bold green]✓ COMPRA REGISTRADA COM SUCESSO![/bold green]\n"
+        f"[bold green]✓ COMPRA REGISTRADA COM SUCESSO!{env_tag}[/bold green]\n"
         f"Ativo: [bold]{pos.ticker}[/bold] | Qtd Total: {pos.quantity} ações | "
         f"Novo Preço Médio: [bold]R$ {pos.average_price:.2f}[/bold] | Custo Total: R$ {pos.total_cost:,.2f}"
     )
+    if pos.partial_target:
+        console.print(
+            f"🎯 Alvo Parcial (TP1): R$ {pos.partial_target:.2f} ({pos.partial_quantity or (pos.quantity // 2)} ações) | "
+            f"Novo Stop pós-parcial: R$ {(pos.new_stop_after_partial or pos.average_price):.2f}"
+        )
 
 
 @app.command()
@@ -216,6 +235,7 @@ def sell(
     price: float = typer.Argument(..., help="Preço unitário de venda (R$)"),
     fees: float = typer.Option(1.50, "--fees", "-f", help="Taxas de corretagem e emolumentos B3 (R$)"),
     notes: Optional[str] = typer.Option(None, "--notes", "-n", help="Notas de encerramento"),
+    simulated: bool = typer.Option(False, "--simulated", "-s", help="Registrar na Carteira Simulada"),
 ):
     """Registra uma ordem de VENDA, apura PnL líquido e atualiza o livro fiscal do mês."""
     init_db()
@@ -228,6 +248,7 @@ def sell(
             price=price,
             fees=fees,
             notes=notes,
+            is_simulated=simulated,
         )
         session.close()
 
@@ -335,6 +356,91 @@ def audit_trava_command(
     )
 
     console.print(Panel(panel_text, title=f"Auditoria Quantitativa de Opções - {ticker}", border_style=border_color))
+
+
+@app.command(name="ask")
+def ask_command(
+    question: str = typer.Argument(..., help="Pergunta em linguagem natural (ex: 'Posso comprar PETR4?' ou 'Devo vender algo?')"),
+    simulated: bool = typer.Option(False, "--simulated", "-s", help="Consultar no contexto da Carteira Simulada"),
+):
+    """Consulta o Assistente Operacional em tempo real sobre compras, vendas e setups da B3."""
+    init_db()
+    session = get_db_session()
+    with console.status("[bold cyan]Analisando mercado e dados técnicos...[/bold cyan]"):
+        response = process_chat_query(question, session, is_simulated=simulated)
+    console.print(Panel(response, title="Assistente Operacional B3", border_style="cyan"))
+    session.close()
+
+
+@app.command(name="partial-sale")
+def partial_sale_command(
+    ticker: str = typer.Argument(..., help="Código da ação (ex: SOJA3, PETR4)"),
+    quantity: int = typer.Argument(..., help="Quantidade de ações a vender na parcial"),
+    price: float = typer.Argument(..., help="Preço de venda executado em R$"),
+    new_stop: Optional[float] = typer.Option(None, "--new-stop", "-ns", help="Novo Stop Loss a cadastrar para as ações restantes"),
+    fees: float = typer.Option(0.0, "--fees", "-f", help="Taxas de corretagem e emolumentos em R$"),
+    simulated: bool = typer.Option(False, "--simulated", "-s", help="Registrar na Carteira Simulada"),
+):
+    """Executa a Realização Parcial (Scale-Out) e eleva o Stop Loss das ações restantes."""
+    init_db()
+    session = get_db_session()
+    try:
+        res = execute_partial_sale(
+            session=session,
+            ticker=ticker,
+            quantity=quantity,
+            price=price,
+            new_stop_loss=new_stop,
+            fees=fees,
+            is_simulated=simulated,
+        )
+        pnl_color = "green" if res["realized_pnl"] >= 0 else "red"
+        output_txt = (
+            f"[bold green]✓ Realização Parcial Registrada com Sucesso![/bold green]\n\n"
+            f"• Ativo: [bold]{res['ticker']}[/bold]\n"
+            f"• Quantidade Vendida: {res['quantity_sold']} ações a R$ {res['sale_price']:.2f}\n"
+            f"• Lucro Realizado: [{pnl_color}]R$ {res['realized_pnl']:+,.2f} ({res['realized_pnl_pct']:+.2f}%)[/{pnl_color}]\n"
+            f"• Posição Remanescente: {res['remaining_quantity']} ações (PM R$ {res['average_price']:.2f})\n"
+            f"• Novo Stop Loss: R$ {res['new_stop_loss']:.2f}\n"
+            f"• [bold]Lucro Mínimo Garantido no Pior Caso:[/bold] [bold green]R$ {res['guaranteed_total_pnl']:+,.2f}[/bold green]\n\n"
+            f"[bold cyan]📋 Roteiro de Execução no Home Broker:[/bold cyan]\n"
+            + "\n".join(res["broker_instructions"])
+        )
+        console.print(Panel(output_txt, title=f"Realização Parcial - {ticker}", border_style="green"))
+    except Exception as e:
+        console.print(f"[bold red]Erro ao executar realização parcial: {e}[/bold red]")
+    finally:
+        session.close()
+
+
+@app.command(name="watch")
+def watch_command(
+    interval: int = typer.Option(300, "--interval", "-i", help="Intervalo de verificação em segundos (padrão: 300s / 5min)"),
+    max_loops: Optional[int] = typer.Option(None, "--loops", "-l", help="Número máximo de verificações antes de parar"),
+):
+    """Monitora cotações intradiárias da carteira durante o pregão com alertas no Telegram e Mac."""
+    console.print(f"[bold cyan]Iniciando monitor intradiário de preços (intervalo: {interval}s)...[/bold cyan]")
+    console.print("[dim]Pressione Ctrl+C para encerrar o monitoramento.[/dim]\n")
+    try:
+        run_intraday_price_watcher(interval_seconds=interval, max_iterations=max_loops)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Monitor intradiário encerrado.[/yellow]")
+
+
+@app.command(name="check-reversals")
+def check_reversals_command():
+    """Varre a lista de vigilância (ex: WEGE3, EGIE3) em busca de sinais de reversão e pivô de fundo."""
+    init_db()
+    session = get_db_session()
+    from b3pilot.alerts.price_watcher import check_reversal_watch_list, REVERSAL_WATCH_LIST
+    console.print(f"[bold cyan]Verificando radar de reversão para: {', '.join(REVERSAL_WATCH_LIST)}...[/bold cyan]")
+    alerts = check_reversal_watch_list(session)
+    if not alerts:
+        console.print("[dim]Nenhum ativo do radar confirmou reversão acima da EMA 9 hoje. Continua em queda livre / observação.[/dim]")
+    else:
+        for a in alerts:
+            console.print(f"[bold green]🔔 Reversão confirmada em {a['ticker']} a R$ {a['price']:.2f} (superou EMA 9: R$ {a['ema9']:.2f})[/bold green]")
+    session.close()
 
 
 if __name__ == "__main__":

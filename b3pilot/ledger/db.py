@@ -1,7 +1,11 @@
 """Camada de persistência local SQLite e schemas do SQLAlchemy."""
 
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional
+
+def naive_utc_now():
+    """Retorna datetime UTC sem timezone info para compatibilidade estrita SQLite."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 from sqlalchemy import (
     create_engine,
     Column,
@@ -26,7 +30,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(DateTime, default=datetime.utcnow, nullable=False)
+    date = Column(DateTime, default=naive_utc_now, nullable=False)
     ticker = Column(String(20), nullable=False, index=True)
     type = Column(String(10), nullable=False)  # 'BUY' ou 'SELL'
     quantity = Column(Integer, nullable=False)
@@ -53,10 +57,14 @@ class Position(Base):
     total_cost = Column(Float, nullable=False)     # average_price * quantity
     stop_loss = Column(Float, nullable=True)
     take_profit = Column(Float, nullable=True)
+    partial_target = Column(Float, nullable=True)          # Alvo de Realização Parcial (TP1)
+    partial_quantity = Column(Integer, nullable=True)      # Quantidade da parcial (ex: 50%)
+    new_stop_after_partial = Column(Float, nullable=True)  # Novo Stop após a realização parcial
+    is_partial_executed = Column(Boolean, default=False, nullable=False)  # Status da realização parcial
     trailing_stop = Column(Float, nullable=True)
     highest_price = Column(Float, nullable=True)   # Maior máxima desde a entrada
     strategy = Column(String(50), default="MANUAL")
-    entry_date = Column(DateTime, default=datetime.utcnow)
+    entry_date = Column(DateTime, default=naive_utc_now)
     is_simulated = Column(Boolean, default=False, nullable=False, index=True)
 
 
@@ -76,7 +84,7 @@ class MonthlyTaxRecord(Base):
     irrf_withheld = Column(Float, default=0.0)      # 0,005% dedo-duro retido na fonte
     final_darf = Column(Float, default=0.0)         # Valor a pagar no DARF (se >= R$ 10,00)
     is_paid = Column(Boolean, default=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=naive_utc_now, onupdate=naive_utc_now)
 
 
 class DividendRecord(Base):
@@ -101,7 +109,7 @@ class AlertLog(Base):
     __tablename__ = "alert_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=naive_utc_now, index=True)
     ticker = Column(String(20), nullable=False)
     alert_type = Column(String(30), nullable=False)  # 'BUY', 'SELL', 'DATA_COM'
     message = Column(Text, nullable=False)
@@ -125,6 +133,21 @@ def init_db():
                     conn.commit()
             except Exception:
                 pass
+
+        # Migrações específicas de Realização Parcial em positions
+        try:
+            pos_cols = [c[1] for c in conn.exec_driver_sql("PRAGMA table_info(positions)").fetchall()]
+            if "partial_target" not in pos_cols:
+                conn.exec_driver_sql("ALTER TABLE positions ADD COLUMN partial_target REAL")
+            if "partial_quantity" not in pos_cols:
+                conn.exec_driver_sql("ALTER TABLE positions ADD COLUMN partial_quantity INTEGER")
+            if "new_stop_after_partial" not in pos_cols:
+                conn.exec_driver_sql("ALTER TABLE positions ADD COLUMN new_stop_after_partial REAL")
+            if "is_partial_executed" not in pos_cols:
+                conn.exec_driver_sql("ALTER TABLE positions ADD COLUMN is_partial_executed BOOLEAN DEFAULT 0 NOT NULL")
+            conn.commit()
+        except Exception:
+            pass
 
 
 def get_db_session() -> Session:

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 from rich.console import Console
 
-from b3pilot.ledger.db import get_db_session, AlertLog, init_db
+from b3pilot.ledger.db import get_db_session, AlertLog, init_db, naive_utc_now
 from b3pilot.core.exits import evaluate_open_positions_exits
 from b3pilot.core.screener import run_screener
 from b3pilot.core.regime import analyze_market_regime
@@ -60,7 +60,7 @@ def run_morning_routine(dry_run: bool = False) -> Dict[str, Any]:
             if not dry_run:
                 dispatch_alert(title, subtitle, msg)
                 log = AlertLog(
-                    timestamp=datetime.utcnow(),
+                    timestamp=naive_utc_now(),
                     ticker=exit_item["ticker"],
                     alert_type=exit_item["type"],
                     message=msg,
@@ -101,7 +101,7 @@ def run_morning_routine(dry_run: bool = False) -> Dict[str, Any]:
             if not dry_run:
                 dispatch_alert(title, subtitle, msg)
                 log = AlertLog(
-                    timestamp=datetime.utcnow(),
+                    timestamp=naive_utc_now(),
                     ticker=buy_item["ticker"],
                     alert_type="BUY",
                     message=msg,
