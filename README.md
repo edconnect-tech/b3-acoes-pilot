@@ -20,6 +20,7 @@ b3-acoes-pilot/
 │   │   └── screener.py     # Scanner unificado com confluência e ranking
 │   ├── data/               # Ingestão de dados de mercado e universo B3
 │   │   ├── b3_feed.py      # Cache local em Parquet e downloads via yfinance
+│   │   ├── sectors.py      # Matriz Setorial B3 e Macro-Clusters de Risco
 │   │   └── universe.py     # Universos Top B3 (alta liquidez) e Amplo
 │   ├── ledger/             # Livro-razão financeiro, carteira e tributação
 │   │   ├── db.py           # Esquema relacional SQLAlchemy (SQLite)
@@ -119,7 +120,52 @@ Para evitar comprar ativos esticados no topo do canal anual e selecionar papéis
 
 ---
 
-### 6. Motor de Saídas Contínuo (`core/exits.py`)
+### 6. Matriz Setorial, Macro-Clusters e Gestão de Correlação Cruzada (`data/sectors.py` & `core/risk.py`)
+
+Para eliminar o risco da **falsa diversificação** — quando o investidor compra empresas aparentemente distintas que, na realidade, respondem ao mesmo choque macroeconômico e despencam juntas —, o sistema implementa uma camada de inteligência setorial e macro-clusters de risco:
+
+#### O Caso Crítico: Banco do Brasil (`BBAS3`) + Agronegócio
+* **A Armadilha:** O investidor adquire ações do Banco do Brasil acreditando estar posicionado no setor bancário defensivo e, simultaneamente, compra ações de empresas agrícolas (como `SOJA3`, `SMTO3`, `AGRO3`, `SLCE3`).
+* **A Realidade Institucional:** O Banco do Brasil é o maior financiador do agronegócio do país, detendo mais de **50% de participação no crédito rural** e mais de **35% de sua carteira de crédito total** vinculada ao campo.
+* **O Risco Sistêmico:** Em safras com quebra de produção, retração no preço de commodities (soja, milho, açúcar) ou pedidos em série de recuperação judicial de produtores rurais, a inadimplência agrícola e as provisões para devedores duvidosos do BB aumentam expressivamente. **O resultado é uma queda simultânea de BBAS3 e das ações do agronegócio.**
+* **A Blindagem do B3 Pilot:** O ativo `BBAS3` possui dupla classificação no sistema: `FINANCEIRO_BANCOS` e `AGRONEGOCIO`. Qualquer tentativa de sobrepor posições de crédito rural e agronegócio é imediatamente bloqueada ou sinalizada com alerta de alto risco.
+
+#### Mapeamento dos Macro-Clusters de Risco da B3
+Cada ativo é catalogado com suas vulnerabilidades sistêmicas comuns:
+
+| Macro-Cluster | Ativos Típicos Mapeados | Fatores de Risco Sistêmico / Gatilho de Queda Conjunta |
+| :--- | :--- | :--- |
+| **`AGRONEGOCIO`** | `SOJA3`, `SMTO3`, `AGRO3`, `SLCE3`, `TTEN3`, `KEPL3`, `JALL3`, `CAML3`, `BBAS3`* | Clima/seca, quebra de safra, preços internacionais de grãos e inadimplência rural. |
+| **`PETROLEO_E_GAS`** | `PETR3`, `PETR4`, `PRIO3`, `RECV3`, `VBBR3`, `UGPA3`, `CSAN3` | Cotação global do barril de petróleo tipo Brent e margens de refino. |
+| **`MINERACAO_E_SIDERURGIA`** | `VALE3`, `BRAP4`, `CSNA3`, `GGBR4`, `USIM5` | Preço do minério de ferro em Qingdao/Dalian e demanda de construção na China. |
+| **`CONSTRUCAO_CIVIL`** | `CYRE3`, `DIRR3`, `CURY3`, `TEND3`, `LAVV3`, `PLPL3` | Curva longa de juros (DI futuro), taxas de financiamento imobiliário e custo INCC. |
+| **`VAREJO_E_CONSUMO`** | `LREN3`, `MGLU3`, `CEAB3`, `ALOS3`, `MULT3`, `VULC3` | Endividamento das famílias, taxa Selic elevada e contração do poder de compra. |
+| **`FINANCEIRO_BANCOS`** | `ITUB4`, `BBDC4`, `SANB11`, `BPAC11`, `B3SA3`, `BBAS3` | Spread bancário, inadimplência corporativa e volatilidade do mercado de capitais. |
+| **`UTILIDADE_PUBLICA`** | `TAEE11`, `CPLE3`, `CMIG4`, `EGIE3`, `ALUP11`, `EQTL3`, `SBSP3` | Risco hidrológico, taxa de desconto real (NTN-B) e reajustes regulatórios (Aneel/Arsesp). |
+| **`PAPEL_E_CELULOSE`** | `SUZB3`, `KLBN11` | Cotação internacional da celulose BHKP e taxa de câmbio USD/BRL. |
+| **`FRIGORIFICOS_PROTEINA`**| `JBSS3`, `BRFS3`, `BEEF3`, `MRFG3` | Ciclo do gado, preço dos grãos para ração (soja/milho) e barreiras sanitárias. |
+| **`SAUDE_E_FARMACIA`** | `RADL3`, `HAPV3`, `FLRY3`, `HYPE3`, `BLAU3`, `PNVL3` | Sinistralidade médica (MLR), reajustes da ANS e poder de compra de medicamentos. |
+| **`TECNOLOGIA_E_TELECOM`** | `TOTS3`, `POSI3`, `INTB3`, `TIMS3`, `VIVT3`, `FIQE3` | Ciclos de Capex corporativo, competição tarifária e taxas de juros de longo prazo. |
+| **`BENS_DE_CAPITAL`** | `WEGE3`, `EMBJ3`, `POMO4`, `RAPT4`, `FRAS3`, `MYPK3`, `SHUL4` | Atividade industrial, exportações, custos de aço e renovação de frotas pesadas. |
+| **`LOGISTICA_E_TRANSPORTE`**| `CCRO3`, `RAIL3`, `RENT3`, `SIMH3`, `TGMA3`, `PORT3`, `STBP3` | Volume de comércio exterior, tráfego rodoviário e escoamento de safras. |
+
+*\*Nota: BBAS3 possui correlação cruzada documentada com o cluster rural em razão de sua carteira de crédito.*
+
+#### Regras de Governança e Seleção Anti-Cluster
+1. **Teto Setorial Prudencial:** Nenhuma carteira pode manter mais de **35% do capital alocado em um único setor**.
+2. **Limite de Trades Ativos por Macro-Cluster:** Máximo de **1 operação simultânea por cluster** (evitando ter simultaneamente SOJA3 + SMTO3 + BBAS3).
+3. **Score de Diversificação da Carteira (0 a 100):** Avalia a saúde da carteira, penalizando agrupamentos correlacionados e concentrações desproporcionais:
+   * $\ge 80$: **Excelente** (Descorrelacionada e protegida contra choques).
+   * $60 - 79$: **Moderada** (Atenção a sobreposições pontuais).
+   * $< 60$: **Crítica** (Alta probabilidade de perdas em cadeia).
+4. **Filtro de Descorrelação no Screener e Morning Job (`filter_diversified_signals`):**
+   * Ao ranquear as melhores compras, o algoritmo descarta ativos que colidam com clusters já detidos na custódia do investidor.
+   * Garante que as 3 recomendações matinais pertençam a **setores 100% independentes** entre si.
+5. **Auditoria Reativa Pré-Ordem:** O terminal (`b3pilot buy`), a boleta do Dashboard Web e o Chat emitem avisos explicativos antes de qualquer compra caso o papel aumente o risco de correlação.
+
+---
+
+### 7. Motor de Saídas Contínuo (`core/exits.py`)
 Monitora diariamente todas as posições abertas (reais e simuladas), avaliando:
 1. **Stop Loss Atingido:** Cotação $\le \text{Stop Loss}$ $\rightarrow$ Venda imediata com **Urgência ALTA**.
 2. **Alvo de Realização Parcial (TP1):** Cotação $\ge \text{Alvo Parcial}$ $\rightarrow$ Venda de 50% da posição e subida do stop para garantir lucro no pior caso (**Urgência MÉDIA**).
@@ -129,7 +175,7 @@ Monitora diariamente todas as posições abertas (reais e simuladas), avaliando:
 
 ---
 
-### 7. Realização Parcial (Scale-Out) & Roteiro Home Broker (`ledger/portfolio.py`)
+### 8. Realização Parcial (Scale-Out) & Roteiro Home Broker (`ledger/portfolio.py`)
 * **Eliminação de Risco:** Venda de 50% das ações ao bater o TP1 e elevação do stop das ações remanescentes para breakeven ou lucro travado.
 * **Cálculo de Lucro Garantido (Pior Caso):**
   $$\text{PnL Mínimo} = \text{Lucro da Parcial} + [(\text{Novo Stop} - \text{Preço Médio}) \times \text{Qtd Restante}]$$
@@ -148,13 +194,19 @@ Execute localmente com `b3pilot web` ou `streamlit run b3pilot/web/app.py`:
 * **Estética Clean / Modo Claro:** Tipografia de sistema legível, contrastes com certificação WCAG e sem dark mode forçado.
 * **💬 Assistente & Chat Operacional:**
   * Área interativa para questionar antes de abrir ou encerrar ordens (ex: *"Posso comprar PETR4 agora?"*, *"Devo vender VALE3 hoje?"*).
-  * Veredito técnico instantâneo: **COMPRA**, **VENDA** ou **AGUARDAR**, cruzando IBOVESPA, Médias, IFR2, Range de 52S e custódia em aberto.
+  * Veredito técnico instantâneo: **COMPRA**, **VENDA** ou **AGUARDAR**, cruzando IBOVESPA, Médias, IFR2, Range de 52S, **Setores/Clusters** e custódia em aberto.
+  * **Alerta Setorial Ativo:** Se o ativo consultado colidir com clusters já detidos em custódia (ex: já possui BBAS3 e pergunta sobre SOJA3 ou SMTO3), o chat emite aviso preventivo de concentração de risco.
   * **Simulador de Parciais em Linguagem Natural:** Ex: *"Simular parcial de SOJA3 vendendo a 8,60 e novo stop a 8,25"* $\rightarrow$ Cálculo exato do lucro no bolso e lucro mínimo garantido no pior caso.
-  * Botões de atalho rápido (*chips*) para checagem imediata de saídas, regime e melhores compras.
-* **Dashboard Executivo:** Métricas consolidadas de patrimônio líquido, lucro acumulado, gráfico de evolução, distribuição setorial e assistente interativo de **Realização Parcial (Scale-Out & Subir Stop)**.
+  * Botões de atalho rápido (*chips*) para checagem imediata de saídas, regime e melhores compras descorrelacionadas.
+* **Dashboard Executivo & Radiografia Setorial:**
+  * Métricas consolidadas de patrimônio líquido, lucro acumulado, gráfico de evolução e assistente de **Scale-Out**.
+  * **Painel de Diversificação Setorial:** Gráfico Donut de setores B3, barras de exposição a Macro-Clusters, métrica do **Score de Diversificação (0 a 100)** e alertas explícitos de risco concentrado.
 * **Radar de Oportunidades (Screener):**
-  * Tabela com Notas de Confluência (0 a 10), preços de entrada, stop, alvo, relação R/R, lote sugerido e posição no **Range 52S**.
+  * Tabela com Notas de Confluência (0 a 10), Setor, Segmento, Fator de Risco Macro, Diversificação com a Carteira, preços de entrada, stop, alvo e posição no **Range 52S**.
+  * **Filtros Avançados:** Filtro por Setor da B3 e toggle de segurança para **Ocultar ativos correlacionados à minha custódia atual**.
   * **Navegação Integrada:** Clique em qualquer linha para abrir a análise gráfica detalhada do papel.
+* **Boleta de Nova Compra com Auditoria em Tempo Real:**
+  * Ao digitar o ticker, o sistema analisa imediatamente as posições já em carteira e avisa se a compra violará a política de isolamento de risco (ex: alertando sobre a correlação de crédito rural e agronegócio).
 * **Análise Gráfica & Variações (1D a 10 Anos):**
   * Candlestick com EMA 9, EMA 21, SMA 50, SMA 200, IFR2, IFR14 e ATR.
   * Tabela de rentabilidade histórica: 1 Dia, 5 Dias, 1 Mês, 6 Meses, 1 Ano, 2 Anos, 5 Anos e 10 Anos.
@@ -218,11 +270,12 @@ b3pilot web
 
 ### 4. Alertas Matinais Automatizados (`alerts/morning_job.py`)
 Rotina programada para ser executada antes da abertura do pregão (09:55 BRT):
+* **Auditoria Prévia de Concentração da Carteira:** Detecta se há sobreposição setorial na custódia e emite alerta com Score de Diversificação antes da abertura.
 * **Notificações Push nativas no macOS:** Alerta sonoro e visual sobre ordens críticas de saída.
 * **Disparo via Bot do Telegram:**
   * Diagnóstico do Regime do Ibovespa;
   * **100% dos alertas de venda** (Stops, Alvos atingidos e Time-Stops);
-  * Oportunidades de compra aprovadas no *screener* com lote sugerido.
+  * **Top 3 Compras Vantajosas 100% Descorrelacionadas:** Filtradas pelo algoritmo anti-cluster para garantir que nenhum papel compartilhe fatores de risco com posições em aberto na carteira do investidor nem repita setores entre as recomendações.
 
 ---
 
@@ -230,6 +283,7 @@ Rotina programada para ser executada antes da abertura do pregão (09:55 BRT):
 Integrado via Skill nativa no Antigravity (`.gemini/config/skills/b3-acoes-pilot/SKILL.md`). Permite solicitar em linguagem natural:
 > *"Qual a situação atual da minha carteira?"*  
 > *"Rode o scanner de compras com foco em papéis com espaço até o topo anual."*  
+> *"Verifique se tenho concentração de risco ou ações que caem juntas na carteira."*  
 > *"Preciso pagar DARF esse mês? Como estão os prejuízos a compensar?"*
 
 ---
@@ -266,14 +320,15 @@ pytest
 
 ## 🧪 Testes Automatizados
 
-O sistema conta com suíte de testes unitários com **30 testes automatizados** garantindo a robustez dos cálculos matemáticos e das regras tributárias:
+O sistema conta com suíte de testes unitários com **35 testes automatizados** garantindo a robustez dos cálculos matemáticos, das regras tributárias e da blindagem contra correlação de setores:
 
 ```bash
 pytest -v
 ```
 
 Cobertura dos testes:
-* `tests/test_chat.py`: Motor conversacional, extração de tickers B3, decisões pré-trade e simulação de realização parcial.
+* `tests/test_sector_correlation.py`: Mapeamento setorial B3, correlação cruzada de risco rural entre BBAS3 e empresas agrícolas, cálculo do Score de Diversificação e filtro de seleção anti-cluster.
+* `tests/test_chat.py`: Motor conversacional, extração de tickers B3, decisões pré-trade, alertas de sobreposição setorial e simulação de realização parcial.
 * `tests/test_scale_out.py`: Realização parcial (50%), cálculo de lucro garantido no pior caso, preservação do Preço Médio e detecção em saídas.
 * `tests/test_core.py`: Indicadores técnicos, métricas de 52 semanas, setups IFR2, Trend Following, Retomada de Fundo (Pivôs) e disparos de saída.
 * `tests/test_risk_regime.py`: Transições de regimes de mercado (Bull, Correction, Bear e Pânico cumulativo semanal) e dimensionamento de risco por trade.

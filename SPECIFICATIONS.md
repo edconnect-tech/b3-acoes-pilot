@@ -1,8 +1,8 @@
 # Especificações Técnicas e Arquiteturais — B3 Ações Pilot 🚀
 
-**Versão:** 0.3.0  
+**Versão:** 0.4.0  
 **Stack Principal:** Python 3.11+, Streamlit, Plotly, SQLAlchemy (SQLite), Typer, Rich, pandas, pandas-ta, yfinance.  
-**Arquitetura:** Local-First, Zero Trust no LLM (cálculos 100% determinísticos em Python de 64 bits), Concorrência Multithread no Scanner, Isolamento de Ambientes (Real vs. Simulado) e Modo Claro Acessível (WCAG 2.2 AA).
+**Arquitetura:** Local-First, Zero Trust no LLM (cálculos 100% determinísticos em Python de 64 bits), Concorrência Multithread no Scanner, Isolamento de Ambientes (Real vs. Simulado), Blindagem Anti-Cluster de Correlação Cruzada e Modo Claro Acessível (WCAG 2.2 AA).
 
 ---
 
@@ -37,6 +37,7 @@ b3pilot/
 ├── data/                   # Ingestão e Processamento de Dados de Mercado
 │   ├── b3_feed.py          # Cache local em Parquet e integração yfinance
 │   ├── dividends_feed.py   # Rastreamento de proventos e datas de corte
+│   ├── sectors.py          # Matriz Setorial B3 e Macro-Clusters de Risco
 │   └── universe.py         # Universos de ativos (Top B3 alta liquidez e Amplo)
 ├── alerts/                 # Automação de Alertas Pré-Abertura
 │   ├── morning_job.py      # Job agendado às 09:55 BRT
@@ -174,6 +175,43 @@ Para contornar o gargalo da ingestão serial de 86+ ativos via Yahoo Finance:
 
 ---
 
+### 3.9. Engenharia de Risco Setorial, Macro-Clusters e Mitigação de Correlação Cruzada (`data/sectors.py` & `core/risk.py`)
+
+Projetado para eliminar a **vulnerabilidade de perdas em cadeia por sobreposição oculta de fatores de risco** (como a aposta simultânea em Banco do Brasil e ações agrícolas):
+
+#### A. Formalização dos Macro-Clusters de Risco
+Cada ativo $A_i$ do universo B3 é formalmente mapeado para uma tupla:
+$$\text{Perfil}(A_i) = \langle \text{Setor}_i, \text{Subsetor}_i, \mathcal{C}_i, \text{NotaRisco}_i \rangle$$
+Onde $\mathcal{C}_i \subset \{\text{AGRO}, \text{OIL\_GAS}, \text{METALS}, \text{REAL\_ESTATE}, \text{RETAIL}, \text{BANKS}, \text{UTILITIES}, \dots\}$ representa o conjunto de fatores de choque sistêmico aos quais o ativo é exposto.
+
+#### B. Tratamento de Correlação Estrutural Cruzada: Caso `BBAS3`
+* **Realidade Econômica:** Embora `BBAS3` pertença ao setor `Financeiro/Bancos`, detém mais de **50% do mercado de crédito rural** do Brasil e $>35\%$ de sua carteira de empréstimos total atrelada a produtores agrícolas.
+* **Mapeamento:** `BBAS3` recebe simultaneamente $\mathcal{C}_{BBAS3} = \{\text{FINANCEIRO\_BANCOS}, \text{AGRONEGOCIO}\}$.
+* **Regra de Bloqueio/Alerta:** Se a carteira já possuir qualquer ativo agrícola ($\text{AGRO} \in \mathcal{C}_k$), uma nova entrada em `BBAS3` (ou vice-versa) é classificada como **conflito de alta severidade (`HIGH`)**, impedindo a ilusão de diversificação entre banco e agronegócio.
+
+#### C. Limites Prudenciais e Métricas de Diversificação
+1. **Teto Setorial:**
+   $$E_{setor} = \frac{\sum_{j \in \text{Setor}} \text{Custo}_j}{\text{Capital Base}} \le 35\%$$
+2. **Limite de Ativos por Macro-Cluster:**
+   $$N_{cluster} \le 1 \quad (\text{Teto máximo de 1 operação ativa por fator de choque})$$
+3. **Score de Diversificação da Carteira ($S_{div} \in [10, 100]$):**
+   $$S_{div} = 100 - 25 \times (\text{Violações de Teto Setorial}) - 15 \times (\text{Sobreposições de Cluster})$$
+   * $S_{div} \ge 80$: Carteira Descorrelacionada e Robusta.
+   * $60 \le S_{div} < 80$: Carteira Moderada (Atenção a sobreposições).
+   * $S_{div} < 60$: Carteira Crítica (Vulnerável a choques macro).
+
+#### D. Algoritmo de Seleção Anti-Cluster (`filter_diversified_signals`)
+Ao selecionar as oportunidades de compra (Top 3 matinal ou sugestões no radar):
+1. Descarta ativos que apresentem $\text{Interseção}(\mathcal{C}_{candidato}, \mathcal{C}_{carteira}) \ne \emptyset$ de alta severidade.
+2. Na cesta de recomendações resultantes, garante que:
+   $$\forall i, j \in \text{Cesta}, i \ne j \implies \text{Setor}_i \ne \text{Setor}_j \land \text{Correl}(\mathcal{C}_i, \mathcal{C}_j) = \text{False}$$
+Assegurando que o investidor nunca receba 2 ou 3 recomendações do mesmo setor no mesmo dia.
+
+#### E. Verificação Reativa Pré-Ordem (`check_sector_and_cluster_conflict`)
+Executada em tempo real pelo Chat, pela Boleta Web (`app.py`) e pela CLI (`b3pilot buy`), gerando feedback visual imediato antes da confirmação da ordem no banco de dados.
+
+---
+
 ## 4. Especificações do Livro-Razão e Fiscalidade (`ledger/`)
 
 ### 4.1. Esquema Relacional de Dados (`ledger/db.py`)
@@ -198,15 +236,15 @@ Banco de dados relacional SQLite (`portfolio.db`) gerenciado via SQLAlchemy ORM:
 ### 5.1. Dashboard Web Streamlit (`web/app.py`)
 * **Identidade Visual:** Modo Claro (Clean), fontes de sistema (San Francisco, Segoe UI, Roboto), espaçamentos WCAG 2.2 AA.
 * **Páginas Operacionais:**
-  1. `📊 Visão Geral da Carteira`: Métricas de patrimônio, P&L a mercado, tabela de posições e assistente interativo de **Realização Parcial (Scale-Out & Subir Stop)**.
-  2. `💬 Assistente & Chat Operacional`: Chat com processador de linguagem natural para vereditos pré-trade e **simulação determinística de parciais** em tempo real.
-  3. `🎯 Radar de Oportunidades & Proventos`: Scanner de confluência com coluna `Posição 52S`, link para StatusInvest e navegação em 1 clique para o gráfico.
+  1. `📊 Visão Geral da Carteira`: Métricas de patrimônio, P&L a mercado, tabela de posições enriquecida com Setor e Segmento, **Painel de Radiografia Setorial** (gráfico Donut de setores, barras de macro-clusters e Score de Diversificação) e assistente de **Scale-Out**.
+  2. `💬 Assistente & Chat Operacional`: Chat conversacional com vereditos pré-trade, **alerta preventivo de concentração setorial** caso o usuário consulte ativos correlacionados à custódia, e simulação determinística de parciais.
+  3. `🎯 Radar de Oportunidades & Proventos`: Scanner de confluência com colunas Setor, Segmento, Fator de Risco Macro e Status de Diversificação com a Carteira, com **filtro por Setor da B3** e toggle de segurança para **ocultar ativos correlacionados à custódia**.
   4. `🛡️ Auditoria de Travas de Baixa & Opções`: Simulador de assimetria de estruturas de opções.
   5. `📈 Análise Gráfica & Variações (1D a 10A)`: Gráficos de Candlestick com médias móveis e tabela de retornos de 1D a 10 anos.
   6. `📚 Guia dos Setups & Estratégias`: Manual técnico interativo.
   7. `📜 Histórico & Performance`: Registro completo com opção de estorno de transações acidentais.
   8. `📑 Gestão Fiscal & DARF`: Extrato tributário detalhado e dados da DARF 6015.
-  9. `➕ Registrar Ordem`: Boleta com busca reativa de cotação, sugestão automática de lote, stop, alvos parciais (TP1) e detecção inteligente de venda parcial.
+  9. `➕ Registrar Ordem`: Boleta reativa com busca de cotação, sugestão de lote, alvos parciais (TP1) e **auditoria em tempo real de colisão com setores e clusters da carteira**.
 
 ---
 
@@ -214,16 +252,16 @@ Banco de dados relacional SQLite (`portfolio.db`) gerenciado via SQLAlchemy ORM:
 
 | Comando | Descrição |
 | :--- | :--- |
-| `b3pilot status` | Mostra custódia, cotação a mercado e rentabilidade não realizada. |
-| `b3pilot scan` | Executa o scanner de confluência com Range de 52 Semanas. |
+| `b3pilot status` | Mostra custódia, setor, cluster, rentabilidade a mercado, **Score de Diversificação (0 a 100)** e alertas de concentração setorial. |
+| `b3pilot scan` | Executa o scanner de confluência com Range de 52 Semanas e metadados setoriais. |
 | `b3pilot portfolio` | Extrato resumido das posições abertas. |
 | `b3pilot exits` | Audita disparos de Stop Loss, Alvo, Trailing Stop, Time-Stop e Alvos Parciais. |
 | `b3pilot partial-sale <TICKER> <QTD> <PRECO> [--new-stop VALOR]` | Executa venda parcial, eleva o stop das remanescentes e gera roteiro para o Home Broker. |
 | `b3pilot watch [--interval 300]` | Monitor contínuo intradiário com alertas no Telegram e no macOS. |
-| `b3pilot ask "<pergunta>"` | Consulta o Assistente Operacional ou simula parciais direto no terminal. |
+| `b3pilot ask "<pergunta>"` | Consulta o Assistente Operacional (com verificação de risco de correlação) ou simula parciais direto no terminal. |
 | `b3pilot taxes --month AAAA-MM` | Apura o imposto de renda e calcula a DARF 6015. |
 | `b3pilot dividends` | Calendário de próximas Datas COM de dividendos e JCP. |
-| `b3pilot buy <TICKER> <QTD> <PRECO> [--tp1 X --tp1-qty Y --new-stop-after-partial Z]` | Registra compra de ações com suporte a alvos de parcial e stop dinâmico. |
+| `b3pilot buy <TICKER> <QTD> <PRECO> [--tp1 X --tp1-qty Y --new-stop-after-partial Z]` | Registra compra de ações com **auditoria automática de conflito de cluster/setor contra a carteira**. |
 | `b3pilot sell <TICKER> <QTD> <PRECO> [--simulated]` | Registra a venda e liquida posição na custódia (Real ou Simulada). |
 | `b3pilot audit-trava` | Audita assimetria risco/retorno de travas com opções. |
 | `b3pilot web` | Inicia o servidor visual Streamlit na porta 8501. |
@@ -232,9 +270,10 @@ Banco de dados relacional SQLite (`portfolio.db`) gerenciado via SQLAlchemy ORM:
 
 ## 6. Qualidade de Software e Testes Automatizados
 
-O sistema possui uma suíte de testes com **30 testes unitários automatizados** rodando via `pytest`:
+O sistema possui uma suíte de testes com **35 testes unitários automatizados** rodando via `pytest`:
 
-* `tests/test_chat.py`: Extração de tickers, vereditos de compra/venda/espera, respostas a stops rompidos e simulação de parcial.
+* `tests/test_sector_correlation.py`: Mapeamento setorial B3, correlações cruzadas de risco rural (BBAS3 + empresas agrícolas), auditoria de conflito de clusters, cálculo do Score de Diversificação e algoritmo de seleção anti-cluster.
+* `tests/test_chat.py`: Extração de tickers, vereditos de compra/venda/espera, alertas de sobreposição setorial, respostas a stops rompidos e simulação de parcial.
 * `tests/test_scale_out.py`: Execução de venda parcial, cálculo de pior caso/lucro garantido, preservação de Preço Médio e detecção em saídas.
 * `tests/test_core.py`: Indicadores técnicos, métricas de 52 semanas, setups IFR2, Trend, Retomada de Fundo (Pivôs) e saídas.
 * `tests/test_risk_regime.py`: Transições de regimes do Ibovespa (Bull, Correction, Bear e Pânico cumulativo semanal) e dimensionamento de lote (2%).
