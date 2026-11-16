@@ -4,10 +4,14 @@ from datetime import datetime
 from typing import Dict, Any, List
 from rich.console import Console
 
-from b3pilot.ledger.db import get_db_session, AlertLog, init_db, naive_utc_now
+from b3pilot.ledger.db import get_db_session, AlertLog, Position, init_db, naive_utc_now
 from b3pilot.core.exits import evaluate_open_positions_exits
 from b3pilot.core.screener import run_screener
 from b3pilot.core.regime import analyze_market_regime
+from b3pilot.core.risk import (
+    filter_diversified_signals,
+    analyze_portfolio_sector_distribution,
+)
 from b3pilot.alerts.notifier import dispatch_alert
 
 console = Console()
@@ -43,6 +47,36 @@ def run_morning_routine(dry_run: bool = False) -> Dict[str, Any]:
     console.print("[yellow]Verificando posições em aberto para saídas...[/yellow]")
     exit_signals = evaluate_open_positions_exits(session)
 
+    # Consulta posições em custódia real para análise de diversificação setorial
+    open_positions = session.query(Position).filter_by(is_simulated=False).all()
+    open_tickers = [p.ticker for p in open_positions]
+
+    # Auditoria de Concentração Setorial e Riscos Cruzados na Carteira Atual
+    if open_positions:
+        portfolio_dicts = [
+            {
+                "ticker": p.ticker,
+                "total_cost": p.total_cost,
+                "quantity": p.quantity,
+                "average_price": p.average_price,
+            }
+            for p in open_positions
+        ]
+        portfolio_sec_audit = analyze_portfolio_sector_distribution(portfolio_dicts)
+        if portfolio_sec_audit.get("concentration_warnings"):
+            console.print("[bold red]⚠️ Alerta de Concentração Setorial na Carteira Atual detectado.[/bold red]")
+            warn_lines = "\n".join(f"• {w}" for w in portfolio_sec_audit["concentration_warnings"])
+            conc_title = "⚠️ ALERTA DE CONCENTRAÇÃO NA CARTEIRA"
+            conc_sub = f"Diagnóstico: {portfolio_sec_audit['diversification_status']} ({portfolio_sec_audit['diversification_score']}/100)"
+            conc_msg = (
+                f"Identificamos posições na sua custódia com fatores de risco em comum (setores que sobem/caem juntos):\n\n"
+                f"{warn_lines}\n\n"
+                f"🛡️ *Diretriz Preventiva:* Novas compras automáticas excluirão ativos com correlação a esses grupos."
+            )
+            if not dry_run:
+                dispatch_alert(conc_title, conc_sub, conc_msg)
+                alerts_sent += 1
+
     # DISPARO COMPULSÓRIO DE VENDAS (100% Notificadas)
     if exit_signals:
         for exit_item in exit_signals:
@@ -73,21 +107,39 @@ def run_morning_routine(dry_run: bool = False) -> Dict[str, Any]:
 
     # 2. Varre o mercado buscando compras de ALTA CONVICÇÃO (Score >= 8.0)
     buy_signals = []
+    diversified_buys = []
     if regime["status"] != "PANIC":
         console.print("[yellow]Buscando oportunidades de compra com alta confluência...[/yellow]")
-        buy_signals = run_screener(high_conviction_only=True, show_progress=False)
+        raw_buys = run_screener(high_conviction_only=True, show_progress=False)
 
-    # DISPARO DE COMPRAS MUITO VANTAJOSAS (Filtradas com Position Sizing)
-    if buy_signals:
-        for buy_item in buy_signals[:3]:  # Top 3
+        # Filtro de Descorrelação Setorial Institucional (Anti-Cluster)
+        # 1. Impede indicar ativos que colidam com o setor/cluster da carteira atual (ex: BBAS3 + Agro)
+        # 2. Impede indicar 2 ativos do mesmo setor ou cluster correlacionado entre si no mesmo dia
+        diversified_buys = filter_diversified_signals(
+            raw_buys,
+            current_portfolio_tickers=open_tickers,
+            max_signals=3,
+            allow_same_cluster=False,
+        )
+        buy_signals = diversified_buys
+
+    # DISPARO DE COMPRAS MUITO VANTAJOSAS (Filtradas com Position Sizing e Descorrelação)
+    if diversified_buys:
+        for buy_item in diversified_buys:
             title = f"⭐ COMPRA VANTAJOSA: {buy_item['ticker']}"
             subtitle = f"{buy_item['name']} (Score: {buy_item['score']}/10)"
             suggested_shares = buy_item.get("suggested_shares", 100)
             suggested_capital = buy_item.get("suggested_capital", buy_item["entry_price"] * 100)
             actual_risk_pct = buy_item.get("actual_risk_pct", 2.0)
+            sector_name = buy_item.get("sector", "Diversificado")
+            subsector_name = buy_item.get("subsector", "")
+
+            div_badge = "✓ Cesta Descorrelacionada" if buy_item.get("is_diversified_pick", True) else "⚠️ Setor com Alerta de Risco"
 
             msg = (
                 f"• *Ativo:* `{buy_item['ticker']}` ({buy_item['name']})\n"
+                f"• *Setor / Segmento:* {sector_name} ({subsector_name})\n"
+                f"• *Diversificação de Risco:* {div_badge}\n"
                 f"• *Regime Macro:* {buy_item.get('regime_name', regime['name'])}\n"
                 f"• *Entrada Ref.:* R$ {buy_item['entry_price']:.2f}\n"
                 f"• *Stop Loss:* R$ {buy_item['stop_loss']:.2f}\n"

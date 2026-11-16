@@ -20,6 +20,7 @@ from b3pilot.core.strategies import (
 from b3pilot.core.dividend_strategy import evaluate_dividend_setup
 from b3pilot.core.regime import analyze_market_regime
 from b3pilot.core.risk import calculate_position_size
+from b3pilot.data.sectors import get_asset_sector_profile
 from b3pilot.config import (
     DEFAULT_CAPITAL,
     RISK_MAX_PER_TRADE_PERCENT,
@@ -152,8 +153,15 @@ def run_screener(
             or (r["strategy"] == "DIVIDEND_COM" and r["score"] >= 8.0)
         ]
 
-    # Dimensionamento de Posição (Position Sizing) para cada oportunidade aprovada
+    # Dimensionamento de Posição (Position Sizing) e Perfil Setorial para cada oportunidade aprovada
     for item in filtered:
+        # Metadados de Setor e Clusters de Risco
+        sec_profile = get_asset_sector_profile(item.get("ticker", ""))
+        item["sector"] = sec_profile.get("sector", "Outros")
+        item["subsector"] = sec_profile.get("subsector", "Geral")
+        item["clusters"] = sec_profile.get("clusters", [])
+        item["macro_risk_note"] = sec_profile.get("macro_risk_note", "")
+
         if item.get("signal") == "BUY" and "entry_price" in item and "stop_loss" in item:
             sizing = calculate_position_size(
                 entry_price=item["entry_price"],

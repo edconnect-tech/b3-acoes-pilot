@@ -24,6 +24,11 @@ RISK_MAX_PER_TRADE_PERCENT = float(os.getenv("RISK_MAX_PER_TRADE_PERCENT", "0.02
 MAX_POSITION_ALLOCATION_PERCENT = float(os.getenv("MAX_POSITION_ALLOCATION_PERCENT", "0.25"))  # Máx 25% do capital em um ativo
 MIN_ADTV_FINANCIAL = float(os.getenv("MIN_ADTV_FINANCIAL", "5000000.00"))  # Mínimo R$ 5M/dia em volume financeiro real
 
+# Gestão de Concentração e Correlação Setorial (Proteção contra apostas concentradas)
+MAX_SECTOR_ALLOCATION_PERCENT = float(os.getenv("MAX_SECTOR_ALLOCATION_PERCENT", "0.35"))  # Máximo 35% da carteira em um mesmo setor
+MAX_CLUSTER_ACTIVE_TRADES = int(os.getenv("MAX_CLUSTER_ACTIVE_TRADES", "1"))  # Máximo 1 trade simultâneo no mesmo cluster de risco
+ENABLE_SECTOR_DIVERSIFICATION = os.getenv("ENABLE_SECTOR_DIVERSIFICATION", "1") == "1"
+
 # Pesos da Estratégia Híbrida
 WEIGHT_MEAN_REVERSION = 0.60  # 60% IFR2
 WEIGHT_TREND_FOLLOWING = 0.40  # 40% Momentum / Seguidor de Tendência

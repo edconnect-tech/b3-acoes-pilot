@@ -15,7 +15,12 @@ from b3pilot.ledger.portfolio import execute_buy, execute_sell, execute_partial_
 from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
 from b3pilot.core.regime import analyze_market_regime
-from b3pilot.core.risk import audit_option_spread
+from b3pilot.core.risk import (
+    audit_option_spread,
+    analyze_portfolio_sector_distribution,
+    check_sector_and_cluster_conflict,
+)
+from b3pilot.data.sectors import get_asset_sector_profile
 from b3pilot.core.chat import process_chat_query
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe
@@ -51,6 +56,8 @@ def status():
 
     table = Table(title="Posições Ativas", show_header=True, header_style="bold magenta")
     table.add_column("Ticker", style="bold")
+    table.add_column("Setor")
+    table.add_column("Macro-Cluster")
     table.add_column("Qtd", justify="right")
     table.add_column("PM (R$)", justify="right")
     table.add_column("Atual (R$)", justify="right")
@@ -63,8 +70,11 @@ def status():
 
     for p in summary["positions"]:
         p_color = "green" if p["unrealized_pnl"] >= 0 else "red"
+        prof = get_asset_sector_profile(p["ticker"])
         table.add_row(
             p["ticker"],
+            prof.get("sector", "Outros"),
+            ", ".join(prof.get("clusters", [])),
             str(p["quantity"]),
             f"R$ {p['average_price']:.2f}",
             f"R$ {p['current_price']:.2f}",
@@ -77,6 +87,24 @@ def status():
         )
 
     console.print(table)
+
+    # Diagnóstico de Diversificação Setorial & Concentração
+    sec_audit = analyze_portfolio_sector_distribution(
+        summary["positions"],
+        total_capital=summary["current_market_value"],
+    )
+    score_color = "green" if sec_audit["diversification_score"] >= 80 else ("yellow" if sec_audit["diversification_score"] >= 60 else "red")
+    console.print(
+        f"\n[bold]Score de Diversificação da Carteira:[/bold] [{score_color}]{sec_audit['diversification_score']:.0f}/100 "
+        f"({sec_audit['diversification_status']})[/{score_color}]"
+    )
+
+    if sec_audit.get("concentration_warnings"):
+        console.print("[bold yellow]⚠️ Alertas de Concentração Setorial / Correlação Compartilhada:[/bold yellow]")
+        for w in sec_audit["concentration_warnings"]:
+            console.print(f"  • [yellow]{w}[/yellow]")
+    console.print()
+
     session.close()
 
 
@@ -198,6 +226,19 @@ def buy(
     """Registra uma ordem de COMPRA, atualizando a custódia e o Preço Médio oficial."""
     init_db()
     session = get_db_session()
+
+    # Auditoria de Conflito de Setor e Risco de Correlação
+    from b3pilot.ledger.db import Position
+    active_positions = session.query(Position).filter_by(is_simulated=simulated).all()
+    active_tickers = [p.ticker for p in active_positions]
+
+    if active_tickers:
+        conflict = check_sector_and_cluster_conflict(ticker, active_tickers)
+        if conflict.get("has_conflict"):
+            console.print(f"\n[bold yellow]⚠️ ALERTA DE CONCENTRAÇÃO SETORIAL:[/bold yellow]")
+            console.print(f"  • [yellow]{conflict['warning_message']}[/yellow]")
+            console.print(f"  • [dim]{conflict['recommendation']}[/dim]\n")
+
     pos = execute_buy(
         session=session,
         ticker=ticker,

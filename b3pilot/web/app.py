@@ -23,7 +23,14 @@ from b3pilot.ledger.taxes import get_current_tax_summary
 from b3pilot.core.screener import run_screener
 from b3pilot.core.strategies import compute_indicators
 from b3pilot.core.regime import analyze_market_regime
-from b3pilot.core.risk import audit_option_spread, calculate_position_size
+from b3pilot.core.risk import (
+    audit_option_spread,
+    calculate_position_size,
+    check_sector_and_cluster_conflict,
+    analyze_portfolio_sector_distribution,
+    filter_diversified_signals,
+)
+from b3pilot.data.sectors import get_asset_sector_profile, B3_SECTORS_DATA
 from b3pilot.core.chat import process_chat_query
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe, SMALL_MID_CAPS, BLUE_CHIPS
@@ -197,16 +204,78 @@ if menu == "📊 Visão Geral da Carteira":
     with col4:
         st.metric("Posições Abertas", f"{summary['num_positions']} ativos")
 
+    # Auditoria de Concentração Setorial & Risco de Correlação Cruzada
+    if summary["positions"]:
+        sec_audit = analyze_portfolio_sector_distribution(
+            summary["positions"],
+            total_capital=summary["current_market_value"],
+        )
+
+        if sec_audit.get("concentration_warnings"):
+            for w in sec_audit["concentration_warnings"]:
+                st.warning(f"⚠️ {w}")
+
+        with st.expander("🛡️ Radiografia Setorial & Mitigação de Correlações Cruzadas", expanded=bool(sec_audit.get("concentration_warnings"))):
+            c_score, c_chart1, c_chart2 = st.columns([1.2, 2, 2])
+            with c_score:
+                st.metric(
+                    "Score de Diversificação",
+                    f"{sec_audit['diversification_score']:.0f} / 100",
+                    sec_audit['diversification_status'],
+                )
+                st.caption(
+                    "Mede o isolamento contra perdas em cadeia. Evita que papéis do mesmo setor "
+                    "ou com risco rural compartilhado (ex: BBAS3 + Agronegócio) derrubem a carteira juntos."
+                )
+            with c_chart1:
+                if sec_audit.get("sector_breakdown"):
+                    sec_df = pd.DataFrame([
+                        {"Setor": s, "Total": d["total_cost"], "Alocação (%)": d["allocation_pct"]}
+                        for s, d in sec_audit["sector_breakdown"].items()
+                    ])
+                    fig_sec = px.pie(
+                        sec_df,
+                        names="Setor",
+                        values="Total",
+                        title="Alocação por Setor B3",
+                        hole=0.4,
+                        color_discrete_sequence=px.colors.qualitative.Safe,
+                    )
+                    fig_sec.update_layout(margin=dict(t=35, b=10, l=10, r=10), height=260)
+                    st.plotly_chart(fig_sec, use_container_width=True)
+            with c_chart2:
+                if sec_audit.get("cluster_breakdown"):
+                    cl_df = pd.DataFrame([
+                        {"Fator de Risco": c, "Total (R$)": d["total_cost"], "Ativos": ", ".join(d["tickers"])}
+                        for c, d in sec_audit["cluster_breakdown"].items()
+                    ])
+                    fig_cl = px.bar(
+                        cl_df,
+                        x="Fator de Risco",
+                        y="Total (R$)",
+                        title="Exposição por Macro-Cluster",
+                        hover_data=["Ativos"],
+                        color_discrete_sequence=["#3b82f6"],
+                    )
+                    fig_cl.update_layout(margin=dict(t=35, b=10, l=10, r=10), height=260)
+                    st.plotly_chart(fig_cl, use_container_width=True)
+
     st.markdown("### Posições em Aberto")
     if summary["positions"]:
+        # Enriquecimento com Setor e Segmento
+        for p in summary["positions"]:
+            prof = get_asset_sector_profile(p["ticker"])
+            p["sector"] = prof.get("sector", "Outros")
+            p["subsector"] = prof.get("subsector", "Geral")
+
         df_pos = pd.DataFrame(summary["positions"])
         df_pos = df_pos[[
-            "ticker", "quantity", "average_price", "current_price",
+            "ticker", "sector", "subsector", "quantity", "average_price", "current_price",
             "market_value", "unrealized_pnl", "unrealized_pnl_pct",
             "stop_loss", "take_profit", "trailing_stop", "strategy", "entry_date"
         ]]
         df_pos.columns = [
-            "Código da Ação", "Quantidade", "Preço Médio (R$)", "Cotação Atual (R$)",
+            "Código da Ação", "Setor", "Segmento", "Quantidade", "Preço Médio (R$)", "Cotação Atual (R$)",
             "Valor a Mercado (R$)", "Resultado Não Realizado (R$)", "Rentabilidade (%)",
             "Stop Loss (R$)", "Alvo / Take Profit (R$)", "Trailing Stop (R$)", "Estratégia", "Data de Entrada"
         ]
@@ -347,8 +416,8 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
     with tab1:
         st.subheader("Scanner de Confluência na B3")
 
-        # Filtros de Segmento de Mercado
-        c1, c2, c3 = st.columns([3, 2, 1])
+        # Filtros de Segmento de Mercado e Setores
+        c1, c2, c3 = st.columns([2.5, 2.5, 1])
         with c1:
             segment_label = st.radio(
                 "Segmento de Mercado:",
@@ -359,6 +428,11 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                     "⚡ Top 20 Mais Líquidas",
                 ],
                 index=0,
+            )
+            only_uncorrelated = st.checkbox(
+                "🛡️ Ocultar ativos correlacionados à minha custódia atual",
+                value=False,
+                help="Elimina ações do mesmo setor ou com fatores de risco em comum (ex: BBAS3 + Agronegócio) com papéis que você já possui em carteira.",
             )
         with c2:
             strategy_style = st.selectbox(
@@ -372,6 +446,9 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
                 ],
                 index=0,
             )
+            all_sectors = ["Todos os Setores"] + sorted(list({v["sector"] for v in B3_SECTORS_DATA.values()}))
+            sector_filter = st.selectbox("Filtrar por Setor da B3:", all_sectors, index=0)
+
             only_high = st.checkbox("Apenas Alta Convicção (Score >= 8.0 & R/R >= 2.2)", value=False)
             if not only_high:
                 min_score = st.slider("Nota de Confluência Mínima:", min_value=6.0, max_value=9.5, value=7.0, step=0.5)
@@ -431,6 +508,20 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
         elif "Captura de Proventos" in strategy_style:
             results = [r for r in results if r["strategy"] == "DIVIDEND_COM"]
 
+        # Filtro de Setor da B3
+        if sector_filter != "Todos os Setores":
+            results = [r for r in results if r.get("sector") == sector_filter]
+
+        # Filtro de Descorrelação contra a Custódia Atual do Usuário
+        user_custody_positions = session.query(Position).filter_by(is_simulated=is_sim_mode).all()
+        user_custody_tickers = [p.ticker for p in user_custody_positions]
+
+        if only_uncorrelated and user_custody_tickers:
+            results = [
+                r for r in results
+                if not check_sector_and_cluster_conflict(r["ticker"], user_custody_tickers)["has_conflict"]
+            ]
+
         if results:
             st.success(f"Encontradas {len(results)} oportunidades com setup ativo.")
 
@@ -444,8 +535,24 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
 
                 range_52s_str = f"{r.get('range_52w_pct', 0):.0f}% (Topo: R$ {r.get('high_52w', 0):.2f})" if "range_52w_pct" in r else "-"
 
+                # Checa relação com a custódia atual
+                sec_prof = get_asset_sector_profile(r["ticker"])
+                sec_name = sec_prof.get("sector", "Outros")
+                sub_name = sec_prof.get("subsector", "Geral")
+                cluster_tags = ", ".join(sec_prof.get("clusters", []))
+
+                div_status = "✓ Descorrelacionado"
+                if user_custody_tickers:
+                    conf = check_sector_and_cluster_conflict(r["ticker"], user_custody_tickers)
+                    if conf.get("has_conflict"):
+                        div_status = f"⚠️ Risco compartilhado ({', '.join(conf['conflicting_tickers'])})"
+
                 table_rows.append({
                     "Código da Ação": r["ticker"],
+                    "Setor": sec_name,
+                    "Segmento": sub_name,
+                    "Fator de Risco Macro": cluster_tags,
+                    "Diversificação Carteira": div_status,
                     "Setup (Estratégia)": r["name"],
                     "Nota de Confluência": f"{r['score']:.1f} / 10",
                     "Preço Entrada (R$)": f"R$ {r['entry_price']:.2f}",
@@ -1048,6 +1155,28 @@ elif menu == "➕ Registrar Ordem":
                     st.metric("Alvo Sugerido (2.5R)", f"R$ {suggested_target:.2f}")
                 with inf4:
                     st.metric("Lote Sugerido (2% Risco)", f"{suggested_qty} ações")
+
+                # Perfil Setorial e Auditoria de Conflito de Risco
+                sec_prof = get_asset_sector_profile(base_typed)
+                st.caption(
+                    f"🏢 **Setor:** {sec_prof.get('sector', 'Diversificado')} | "
+                    f"**Segmento:** {sec_prof.get('subsector', 'Geral')} | "
+                    f"**Macro-Cluster:** {', '.join(sec_prof.get('clusters', []))}"
+                )
+
+                custody_positions = session.query(Position).filter_by(is_simulated=is_sim_order).all()
+                custody_tickers = [p.ticker for p in custody_positions]
+
+                if custody_tickers:
+                    conflict_info = check_sector_and_cluster_conflict(base_typed, custody_tickers)
+                    if conflict_info.get("has_conflict"):
+                        st.warning(
+                            f"⚠️ **Alerta de Concentração Setorial / Correlação de Risco:**\n\n"
+                            f"• {conflict_info['warning_message']}\n\n"
+                            f"🛡️ *Diretriz Institucional:* {conflict_info['recommendation']}"
+                        )
+                    else:
+                        st.success("✓ **Diversificação Aprovada:** Ativo descorrelacionado das posições atuais na custódia.")
 
                 existing_pos = session.query(Position).filter_by(ticker=base_typed, is_simulated=is_sim_order).first()
                 if existing_pos:

@@ -22,6 +22,12 @@ from b3pilot.core.strategies import (
 )
 from b3pilot.core.exits import evaluate_open_positions_exits
 from b3pilot.core.screener import run_screener
+from b3pilot.core.risk import (
+    check_sector_and_cluster_conflict,
+    filter_diversified_signals,
+    analyze_portfolio_sector_distribution,
+)
+from b3pilot.data.sectors import get_asset_sector_profile
 from b3pilot.data.b3_feed import fetch_ticker_data, get_base_ticker
 
 
@@ -231,16 +237,37 @@ def analyze_ticker_for_decision(
             ),
         }
 
+    # Auditoria de Concentração Setorial e Correlação Cruzada contra a Carteira do Usuário
+    open_positions = session.query(Position).filter_by(is_simulated=is_simulated).all()
+    open_tickers = [p.ticker for p in open_positions]
+    sec_conflict = check_sector_and_cluster_conflict(base_ticker, open_tickers) if open_tickers else {"has_conflict": False}
+
+    sec_profile = get_asset_sector_profile(base_ticker)
+    sector_info_str = f"Setor: **{sec_profile.get('sector', 'Diversificado')}** ({sec_profile.get('subsector', '')})"
+
+    conflict_addon = ""
+    if sec_conflict.get("has_conflict"):
+        conflict_addon = (
+            f"\n\n⚠️ **ALERTA INSTITUCIONAL DE CORRELAÇÃO SETORIAL:**\n"
+            f"• {sec_conflict['warning_message']}\n"
+            f"• **Risco:** {sec_conflict['recommendation']}"
+        )
+
     # 1. Setup IFR2 Ativo (Oportunidade de Reversão à Média)
     if ifr2_setup:
+        badge = "🟢 COMPRA RECOMENDADA (Setup IFR2 Ativo)"
+        if sec_conflict.get("has_conflict") and sec_conflict.get("risk_level") == "HIGH":
+            badge = "⚠️ COMPRA COM RESSALVA (Sobreposição com Ativos em Custódia)"
+
         return {
             "ticker": base_ticker,
             "action": "BUY_IFR2",
-            "badge": "🟢 COMPRA RECOMENDADA (Setup IFR2 Ativo)",
+            "badge": badge,
             "price": close,
             "setup": ifr2_setup,
+            "sector": sec_profile.get("sector"),
             "summary": (
-                f"**Oportunidade de Reversão à Média identificada!**\n"
+                f"**Oportunidade de Reversão à Média identificada!** ({sector_info_str})\n"
                 f"• **Gatilho:** IFR(2) em **{ifr2_setup['rsi2']:.1f}** (sobrevenda aguda) acima da SMA 200.\n"
                 f"• **Preço de Referência:** R$ {ifr2_setup['entry_price']:.2f}\n"
                 f"• **Alvo Imediato:** R$ {ifr2_setup['take_profit']:.2f} (Máxima dos últimos 2 pregões)\n"
@@ -249,6 +276,7 @@ def analyze_ticker_for_decision(
                 f"• **Posição no Range de 52S:** {range_52w_pct:.0f}% (Desconto de -{dist_52w_high_pct:.1f}% da máxima anual)\n"
                 f"• **Score de Confluência:** {ifr2_setup['score']:.1f} / 10\n\n"
                 f"**Orientação:** Compra confluente na abertura ou leilão, respeitando rigorosamente o limite de risco de 2%."
+                f"{conflict_addon}"
             ),
         }
 
@@ -481,18 +509,39 @@ def process_chat_query(
                 f"Quando o mercado não oferece risco/retorno favorável, **ficar em caixa é uma decisão ativa de trade**."
             )
 
-        top_opps = opps[:3]
+        open_positions = session.query(Position).filter_by(is_simulated=is_simulated).all()
+        open_tickers = [p.ticker for p in open_positions]
+
+        # Seleção descorrelacionada que protege contra apostas no mesmo setor ou setores cruzados
+        top_opps = filter_diversified_signals(
+            opps,
+            current_portfolio_tickers=open_tickers,
+            max_signals=3,
+            allow_same_cluster=False,
+        )
+
         opp_lines = []
         for op in top_opps:
+            sec_label = f"[{op.get('sector', 'Ações')} — {op.get('subsector', '')}]"
+            div_status = "✓ Descorrelacionado" if op.get("is_diversified_pick", True) else "⚠️ Risco de Sobreposição"
             opp_lines.append(
-                f"• **{op['ticker']}** ({op['name']}) — **Nota {op['score']}/10**\n"
+                f"• **{op['ticker']}** ({op['name']}) {sec_label} — **Nota {op['score']}/10**\n"
+                f"  - **Diversificação:** {div_status}\n"
                 f"  - Entrada Ref.: R$ {op['entry_price']:.2f} | Stop: R$ {op['stop_loss']:.2f} | Alvo: R$ {op['take_profit']:.2f} (R/R: {op.get('rr_ratio', 'N/A')}x)\n"
                 f"  - Range 52S: {op.get('range_52w_pct', 0):.0f}% do canal anual"
             )
 
+        diversification_note = ""
+        if open_tickers:
+            diversification_note = (
+                f"\n\n🛡️ *Filtro Institucional Ativo:* As sugestões acima excluem empresas do mesmo setor "
+                f"ou com correlação cruzada com seus ativos em custódia ({', '.join(open_tickers)})."
+            )
+
         return (
-            f"### 🎯 Top Oportunidades Identificadas no Radar\n\n"
+            f"### 🎯 Top Oportunidades Descorrelacionadas no Radar\n\n"
             + "\n\n".join(opp_lines)
+            + diversification_note
             + f"\n\n*Para ver a análise detalhada de qualquer uma, digite por exemplo: `Analisar {top_opps[0]['ticker']}`.*"
         )
 
