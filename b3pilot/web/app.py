@@ -53,49 +53,286 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Estilização Clean Light Mode (Acessibilidade WCAG 2.2 AA e Fontes de Sistema)
+# Estilização Clean Light Mode Institucional (WCAG 2.2 AA, Fontes de Sistema e Práticas Modernas de UI)
 st.markdown(
     """
     <style>
     /* Tipografia nativa do sistema Apple / Web Clean */
     html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        color: #1f2937;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", Helvetica, Arial, sans-serif;
+        color: #0f172a;
     }
+
+    /* Redução de padding superior padrão do Streamlit para visual de App/Dashboard moderno */
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2.5rem;
+        max-width: 1400px;
+    }
+
+    /* =========================================================================
+       SIDEBAR & MENU DE ACESSO PROFISSIONAL
+       ========================================================================= */
+    [data-testid="stSidebar"] {
+        background-color: #f8fafc;
+        border-right: 1px solid #e2e8f0;
+    }
+
+    /* Brand Header da Sidebar */
+    .sidebar-brand-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 4px 16px 4px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .brand-avatar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        color: #ffffff;
+        font-size: 1.25rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+    }
+    .brand-info {
+        display: flex;
+        flex-direction: column;
+    }
+    .brand-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #0f172a;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+    }
+    .brand-badge {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #2563eb;
+        background-color: #eff6ff;
+        padding: 2px 6px;
+        border-radius: 4px;
+        display: inline-block;
+        width: fit-content;
+        margin-top: 2px;
+        border: 1px solid #dbeafe;
+    }
+
+    /* Subtítulos de Categorias no Menu */
+    .sidebar-category-header {
+        font-size: 0.70rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #64748b;
+        margin-top: 14px;
+        margin-bottom: 6px;
+        padding-left: 8px;
+    }
+
+    /* Estilização dos Itens de Menu (Transforma Radiogroup em Lista de Navegação) */
+    [data-testid="stSidebar"] div[role="radiogroup"] {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+
+    [data-testid="stSidebar"] div[role="radiogroup"] > label {
+        display: flex !important;
+        align-items: center !important;
+        padding: 9px 12px !important;
+        border-radius: 7px !important;
+        border: 1px solid transparent !important;
+        cursor: pointer !important;
+        transition: all 0.15s ease-in-out !important;
+        background-color: transparent !important;
+        margin: 0 !important;
+        width: 100% !important;
+    }
+
+    [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+        background-color: #f1f5f9 !important;
+        color: #0f172a !important;
+    }
+
+    /* Oculta o círculo de seleção nativo de formulário */
+    [data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {
+        display: none !important;
+    }
+
+    /* Ajuste do texto do item */
+    [data-testid="stSidebar"] div[role="radiogroup"] > label > div:last-child {
+        width: 100% !important;
+    }
+    [data-testid="stSidebar"] div[role="radiogroup"] > label p {
+        font-size: 0.88rem !important;
+        font-weight: 500 !important;
+        color: #334155 !important;
+        margin: 0 !important;
+        line-height: 1.4 !important;
+        transition: color 0.15s ease-in-out !important;
+    }
+
+    /* Item Ativo / Selecionado no Menu */
+    [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+        background-color: #eff6ff !important;
+        border: 1px solid #bfdbfe !important;
+        border-left: 4px solid #2563eb !important;
+        box-shadow: 0 1px 2px rgba(37, 99, 235, 0.06) !important;
+    }
+    [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p {
+        color: #1d4ed8 !important;
+        font-weight: 600 !important;
+    }
+
+    /* Card de Ambiente da Carteira */
+    .env-selector-wrapper {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-top: 16px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+    .env-selector-title {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #64748b;
+        margin-bottom: 6px;
+    }
+
+    /* Card de Rodapé da Sidebar */
+    .sidebar-footer-card {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 12px;
+        margin-top: 18px;
+        font-size: 0.78rem;
+        color: #475569;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+    .sidebar-footer-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 4px;
+    }
+    .sidebar-footer-item:last-child {
+        margin-bottom: 0;
+    }
+    .footer-highlight {
+        font-weight: 600;
+        color: #0f172a;
+    }
+
+    /* =========================================================================
+       BOTÕES E ALINHAMENTO GERAL DA INTERFACE
+       ========================================================================= */
+    /* Botões nativos do Streamlit */
+    div.stButton > button {
+        border-radius: 6px !important;
+        font-size: 0.88rem !important;
+        font-weight: 500 !important;
+        padding: 7px 16px !important;
+        min-height: 40px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 6px !important;
+        transition: all 0.15s ease-in-out !important;
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+    }
+    div.stButton > button:hover {
+        background-color: #f8fafc !important;
+        border-color: #94a3b8 !important;
+        color: #0f172a !important;
+    }
+
+    /* Botão Primário */
+    div.stButton > button[kind="primary"] {
+        background-color: #2563eb !important;
+        border-color: #2563eb !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2) !important;
+    }
+    div.stButton > button[kind="primary"]:hover {
+        background-color: #1d4ed8 !important;
+        border-color: #1d4ed8 !important;
+        color: #ffffff !important;
+    }
+
+    /* Cards de Métricas Clean */
     .metric-card {
-        background-color: #f9fafb;
-        border: 1px solid #e5e7eb;
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
         border-radius: 8px;
         padding: 16px;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
     }
+
+    /* Badges Semânticos Institucionais */
     .badge-success {
-        background-color: #ecfdf5;
-        color: #065f46;
-        padding: 4px 8px;
-        border-radius: 4px;
+        background-color: #f0fdf4;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+        padding: 6px 12px;
+        border-radius: 6px;
         font-weight: 600;
         font-size: 0.85rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
     .badge-warning {
         background-color: #fffbeb;
         color: #92400e;
-        padding: 4px 8px;
-        border-radius: 4px;
+        border: 1px solid #fde68a;
+        padding: 6px 12px;
+        border-radius: 6px;
         font-weight: 600;
         font-size: 0.85rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
     .badge-danger {
         background-color: #fef2f2;
         color: #991b1b;
-        padding: 4px 8px;
-        border-radius: 4px;
+        border: 1px solid #fecaca;
+        padding: 6px 12px;
+        border-radius: 6px;
         font-weight: 600;
         font-size: 0.85rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
     }
+
+    /* Cockpit Header de Regime Macro */
+    .macro-cockpit-bar {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin-bottom: 16px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
     .legend-box {
         background-color: #f8fafc;
-        border-left: 4px solid #3b82f6;
+        border-left: 4px solid #2563eb;
         padding: 12px 16px;
         border-radius: 4px;
         margin-bottom: 16px;
@@ -108,11 +345,25 @@ st.markdown(
 
 init_db()
 session = get_db_session()
+regime = analyze_market_regime()
 
-# Sidebar
-st.sidebar.title("🚀 B3 Ações Pilot")
-st.sidebar.markdown("**Assistente de Swing Trade & Proventos**")
-st.sidebar.markdown("---")
+# =============================================================================
+# SIDEBAR INSTITUCIONAL (DESIGN SYSTEM WEB MODERNO)
+# =============================================================================
+st.sidebar.markdown(
+    """
+    <div class="sidebar-brand-card">
+        <div class="brand-avatar">📈</div>
+        <div class="brand-info">
+            <span class="brand-title">B3 Ações Pilot</span>
+            <span class="brand-badge">Institucional • v0.4.0</span>
+        </div>
+    </div>
+    <div class="sidebar-category-header">Navegação Principal</div>
+    """,
+    unsafe_allow_html=True,
+)
+
 MENU_OPTIONS = [
     "📊 Visão Geral da Carteira",
     "💬 Assistente & Chat Operacional",
@@ -132,48 +383,86 @@ chosen_menu = st.sidebar.radio(
     "Navegação:",
     MENU_OPTIONS,
     index=nav_idx,
+    label_visibility="collapsed",
 )
 if chosen_menu != st.session_state["selected_page"]:
     st.session_state["selected_page"] = chosen_menu
 
 menu = st.session_state["selected_page"]
-st.sidebar.markdown("---")
+
+# Seletor de Ambiente Institucional
+st.sidebar.markdown(
+    """
+    <div class="env-selector-wrapper">
+        <div class="env-selector-title">Ambiente de Custódia</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 portfolio_env = st.sidebar.radio(
     "Ambiente da Carteira:",
-    ["💼 Carteira Real", "🧪 Laboratório / Simulação (Paper Trading)"],
+    ["💼 Carteira Real (Capital Ativo)", "🧪 Laboratório Simulado (Paper Trading)"],
     index=0,
+    label_visibility="collapsed",
 )
-is_sim_mode = "Simulação" in portfolio_env
+is_sim_mode = "Simulado" in portfolio_env or "Simulação" in portfolio_env
 
-st.sidebar.markdown("---")
-st.sidebar.info("Modo: **Local / Antigravity agy**\n\nIsenção B3: **R$ 20.000,00/mês**")
+# Rodapé da Sidebar
+st.sidebar.markdown(
+    f"""
+    <div class="sidebar-footer-card">
+        <div class="sidebar-footer-item">
+            <span>Regime IBOV:</span>
+            <span class="footer-highlight">{regime['name']}</span>
+        </div>
+        <div class="sidebar-footer-item">
+            <span>Isenção Fiscal:</span>
+            <span class="footer-highlight">R$ 20.000 / mês</span>
+        </div>
+        <div class="sidebar-footer-item">
+            <span>Motor Quant:</span>
+            <span class="footer-highlight">Local-First (agy)</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-# Gatekeeper Macro IBOVESPA no Topo
-regime = analyze_market_regime()
-reg_col1, reg_col2 = st.columns([3, 1])
-with reg_col1:
-    if regime["status"] == "BULL":
-        st.markdown(f'<div class="badge-success" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:1px solid #10b981;">🟢 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
-    elif regime["status"] == "CORRECTION":
-        st.markdown(f'<div class="badge-warning" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:1px solid #f59e0b;">🟡 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
-    elif regime["status"] == "BEAR":
-        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:1px solid #ef4444;">🔴 <b>REGIME IBOVESPA: {regime["name"]}</b> — {regime["description"]}</div>', unsafe_allow_html=True)
-    elif regime["status"] == "PANIC":
-        st.markdown(f'<div class="badge-danger" style="font-size:0.95rem; padding:10px 14px; margin-bottom:14px; border:2px solid #b91c1c;">🚨 <b>PÂNICO NO IBOVESPA ({regime.get("ibov_change_pct", 0.0)}%)</b> — {regime["description"]}</div>', unsafe_allow_html=True)
-    else:
-        st.caption(f"Status IBOVESPA: {regime['name']}")
+# =============================================================================
+# COCKPIT HEADER MACRO IBOVESPA NO TOPO
+# =============================================================================
+status_color_class = "badge-success" if regime["status"] == "BULL" else ("badge-warning" if regime["status"] == "CORRECTION" else "badge-danger")
+status_icon = "🟢" if regime["status"] == "BULL" else ("🟡" if regime["status"] == "CORRECTION" else ("🚨" if regime["status"] == "PANIC" else "🔴"))
 
-with reg_col2:
-    if regime.get("ibov_close"):
-        st.markdown(
-            f"""
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px; font-size:0.85rem; text-align:right;">
-                <b>IBOV:</b> R$ {regime['ibov_close']:,.0f} ({regime['ibov_change_pct']:+.2f}%)<br/>
-                <b>5D:</b> {regime.get('ibov_change_5d_pct', 0.0):+.2f}% | <b>Risco:</b> {int(regime['allocation_multiplier']*100)}%
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+ibov_close_str = f"R$ {regime['ibov_close']:,.0f}" if regime.get("ibov_close") else "-"
+ibov_change_str = f"{regime.get('ibov_change_pct', 0.0):+.2f}%"
+ibov_5d_str = f"{regime.get('ibov_change_5d_pct', 0.0):+.2f}%"
+alloc_pct_str = f"{int(regime['allocation_multiplier']*100)}%"
+
+ibov_change_color = "#166534" if regime.get("ibov_change_pct", 0.0) >= 0 else "#991b1b"
+
+st.markdown(
+    f"""
+    <div class="macro-cockpit-bar">
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span class="{status_color_class}">
+                {status_icon} <b>{regime['name']}</b>
+            </span>
+            <span style="font-size:0.86rem; color:#475569;">
+                {regime['description']}
+            </span>
+        </div>
+        <div style="display:flex; align-items:center; gap:14px; font-size:0.84rem; background:#f8fafc; border:1px solid #e2e8f0; padding:6px 12px; border-radius:6px; flex-shrink:0;">
+            <div><b>IBOV:</b> <span style="font-weight:600;">{ibov_close_str}</span> <span style="color:{ibov_change_color}; font-weight:600;">({ibov_change_str})</span></div>
+            <div style="color:#cbd5e1;">|</div>
+            <div><b>5D:</b> {ibov_5d_str}</div>
+            <div style="color:#cbd5e1;">|</div>
+            <div><b>Lote Permitido:</b> <span style="font-weight:600; color:#2563eb;">{alloc_pct_str}</span></div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ==========================================
 # 1. VISÃO GERAL DA CARTEIRA
@@ -417,46 +706,53 @@ elif menu == "🎯 Radar de Oportunidades & Proventos":
         st.subheader("Scanner de Confluência na B3")
 
         # Filtros de Segmento de Mercado e Setores
-        c1, c2, c3 = st.columns([2.5, 2.5, 1])
-        with c1:
-            segment_label = st.radio(
-                "Segmento de Mercado:",
-                [
-                    "🌟 Universo Amplo B3 (~100 Ações: Blue Chips + Small & Mid Caps)",
-                    "🚀 Small & Mid Caps / Fora do Radar (Empresas Menores de Alto Crescimento)",
-                    "🏢 Blue Chips Tradicionais (Grandes Empresas / IBOV)",
-                    "⚡ Top 20 Mais Líquidas",
-                ],
-                index=0,
-            )
-            only_uncorrelated = st.checkbox(
-                "🛡️ Ocultar ativos correlacionados à minha custódia atual",
-                value=False,
-                help="Elimina ações do mesmo setor ou com fatores de risco em comum (ex: BBAS3 + Agronegócio) com papéis que você já possui em carteira.",
-            )
-        with c2:
-            strategy_style = st.selectbox(
-                "Estilo Operacional Desejado:",
-                [
-                    "🌟 Todas as Estratégias",
-                    "🟢 Comprar na Baixa / Queda (Reversão IFR2)",
-                    "🚀 Comprar na Força / Rompimento (Momentum)",
-                    "🎯 Retomada de Fundo (Pivô Concluído)",
-                    "💰 Captura de Proventos (Pré-Data COM)",
-                ],
-                index=0,
-            )
-            all_sectors = ["Todos os Setores"] + sorted(list({v["sector"] for v in B3_SECTORS_DATA.values()}))
-            sector_filter = st.selectbox("Filtrar por Setor da B3:", all_sectors, index=0)
-
-            only_high = st.checkbox("Apenas Alta Convicção (Score >= 8.0 & R/R >= 2.2)", value=False)
-            if not only_high:
-                min_score = st.slider("Nota de Confluência Mínima:", min_value=6.0, max_value=9.5, value=7.0, step=0.5)
-            else:
-                min_score = 8.0
-        with c3:
-            st.write("")
-            btn_scan = st.button("🔄 Executar Scanner", type="primary")
+        with st.container():
+            st.markdown('<div class="metric-card" style="margin-bottom:14px;">', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns([3, 3, 2])
+            with c1:
+                st.markdown("<span style='font-size:0.80rem; font-weight:700; text-transform:uppercase; color:#64748b;'>Universo B3</span>", unsafe_allow_html=True)
+                segment_label = st.radio(
+                    "Segmento de Mercado:",
+                    [
+                        "🌟 Universo Amplo B3 (~100 Ações)",
+                        "🚀 Small & Mid Caps (Alto Crescimento)",
+                        "🏢 Blue Chips Tradicionais (IBOV)",
+                        "⚡ Top 20 Mais Líquidas",
+                    ],
+                    index=0,
+                    label_visibility="collapsed",
+                )
+                only_uncorrelated = st.checkbox(
+                    "🛡️ Ocultar ativos correlacionados à custódia",
+                    value=False,
+                    help="Elimina ações do mesmo setor ou com fatores de risco em comum com papéis que você já possui em carteira.",
+                )
+            with c2:
+                st.markdown("<span style='font-size:0.80rem; font-weight:700; text-transform:uppercase; color:#64748b;'>Estratégia & Setor</span>", unsafe_allow_html=True)
+                strategy_style = st.selectbox(
+                    "Estilo Operacional Desejado:",
+                    [
+                        "🌟 Todas as Estratégias",
+                        "🟢 Comprar na Baixa / Queda (Reversão IFR2)",
+                        "🚀 Comprar na Força / Rompimento (Momentum)",
+                        "🎯 Retomada de Fundo (Pivô Concluído)",
+                        "💰 Captura de Proventos (Pré-Data COM)",
+                    ],
+                    index=0,
+                    label_visibility="collapsed",
+                )
+                all_sectors = ["Todos os Setores"] + sorted(list({v["sector"] for v in B3_SECTORS_DATA.values()}))
+                sector_filter = st.selectbox("Filtrar por Setor:", all_sectors, index=0)
+            with c3:
+                st.markdown("<span style='font-size:0.80rem; font-weight:700; text-transform:uppercase; color:#64748b;'>Confluência & Disparo</span>", unsafe_allow_html=True)
+                only_high = st.checkbox("Alta Convicção (Score $\ge 8.0$)", value=False)
+                if not only_high:
+                    min_score = st.slider("Nota Mínima:", min_value=6.0, max_value=9.5, value=7.0, step=0.5)
+                else:
+                    min_score = 8.0
+                st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+                btn_scan = st.button("🔄 Executar Scanner", type="primary", use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
         # Mapeamento do segmento
         if "Small & Mid Caps" in segment_label:
@@ -1094,15 +1390,19 @@ elif menu == "➕ Registrar Ordem":
             key="buy_is_sim_order",
         )
 
-        col_search_t, col_search_act = st.columns([3, 1])
-        with col_search_t:
-            default_t = st.session_state.get("order_ticker", "")
-            typed_ticker = st.text_input(
-                "Ticker da Ação (ex: AURE3, PETR4, VALE3, KEPL3, WEGE3):",
-                value=default_t,
-                key="order_ticker_input",
-                placeholder="Digite o código da ação para carregar cotação e alvos...",
-            ).strip().upper()
+        with st.container():
+            col_search_t, col_search_act = st.columns([4, 1])
+            with col_search_t:
+                default_t = st.session_state.get("order_ticker", "")
+                typed_ticker = st.text_input(
+                    "Código da Ação B3:",
+                    value=default_t,
+                    key="order_ticker_input",
+                    placeholder="Digite o código da ação (ex: PETR4, WEGE3, BBAS3)...",
+                ).strip().upper()
+            with col_search_act:
+                st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+                st.button("🔍 Consultar", use_container_width=True)
 
         clean_typed = get_clean_ticker(typed_ticker) if typed_ticker else ""
         base_typed = get_base_ticker(typed_ticker) if typed_ticker else ""
@@ -1225,7 +1525,7 @@ elif menu == "➕ Registrar Ordem":
         total_op_val = (price * qty) + fees
         st.caption(f"💰 **Total da Operação:** {qty} ações @ R$ {price:.2f} + R$ {fees:.2f} taxas = **R$ {total_op_val:,.2f}**")
 
-        submitted_buy = st.button("🛒 Confirmar Compra", type="primary", key="btn_confirm_buy")
+        submitted_buy = st.button("🛒 Confirmar Compra", type="primary", key="btn_confirm_buy", use_container_width=True)
         if submitted_buy:
             if not base_typed:
                 st.error("Informe o ticker da ação antes de confirmar a compra.")
@@ -1290,7 +1590,7 @@ elif menu == "➕ Registrar Ordem":
             pnl_proj = (price_sell - selected_pos.average_price) * qty_sell - fees_sell
             st.caption(f"💰 **Valor Líquido Previsto:** R$ {total_sell_val:,.2f} | PnL Líquido Estimado: R$ {pnl_proj:,.2f}")
 
-            submitted_sell = st.button("💰 Confirmar Venda", type="primary", key="btn_confirm_sell")
+            submitted_sell = st.button("💰 Confirmar Venda", type="primary", key="btn_confirm_sell", use_container_width=True)
             if submitted_sell:
                 if is_partial:
                     res = execute_partial_sale(
