@@ -71,7 +71,7 @@ Antes de avaliar compras individuais, o sistema monitora o índice **Ibovespa (`
 #### A. Reversão à Média Institucional — IFR(2) (Larry Connors)
 * **Tendência Primária:** Preço obrigatoriamente acima da média móvel aritmética de 200 períodos ($\text{Preço} > \text{SMA}_{200}$).
 * **Gatilho de Entrada:** Índice de Força Relativa de 2 períodos ($\text{IFR}_2 \le 10.0$ em Bull Market ou $\text{IFR}_2 \le 5.0$ em Bear Market).
-* **Filtro de Liquidez Real:** Volume Financeiro Médio Diário dos últimos 21 dias ($\text{ADTV}_{21} \ge \text{R\$\ 5.000.000}$).
+* **Filtro de Liquidez Real:** Volume Financeiro Médio Diário dos últimos 21 dias ($\text{ADTV}_{21}$ ≥ R\$ 5.000.000).
 * **Alvo de Lucro:** Superação da máxima dos 2 pregões anteriores ($\text{HIGH}_{2D}$).
 * **Saída por Tempo (Time-Stop):** Encerramento compulsório no **5º pregão** se o alvo não tiver sido atingido.
 * **Stop Catastrófico Dinâmico:** Ancorado no ATR para calibrar a perda máxima entre $-6\%$ e $-10\%$ conforme a volatilidade do papel: $\text{Stop} = \text{Preço} - \max(\text{Preço} \times 0.06, \min(\text{Preço} \times 0.10, 2.5 \times \text{ATR}_{14}))$.

@@ -68,12 +68,12 @@ Monitora o índice Ibovespa (`^BVSP`) e classifica o mercado em 4 estados determ
 #### A. Reversão à Média Institucional — IFR(2) (Larry Connors)
 * **Tendência Primária:** $\text{Preço Fechamento} > \text{SMA}_{200}$.
 * **Gatilho de Entrada:** $\text{IFR}_2 \le 10.0$ (ou $\text{IFR}_2 \le 5.0$ em regime BEAR).
-* **Filtro de Liquidez Real:** Volume Financeiro Médio Diário $\text{ADTV}_{21} \ge \text{R\$\ 5.000.000}$.
+* **Filtro de Liquidez Real:** Volume Financeiro Médio Diário $\text{ADTV}_{21}$ ≥ R\$ 5.000.000.
 * **Alvo Imediato:** $\text{HIGH}_{2D}$ (Máxima dos últimos 2 pregões).
 * **Saída por Tempo (Time-Stop):** Encerramento compulsório no **5º pregão** se não atingir alvo nem stop.
 * **Stop Catastrófico Dinâmico:** Ancorado no ATR para evitar perdas excessivas em papéis lentos ou violinos em alta volatilidade:
   $$\text{Stop Loss} = \text{Preço} - \max(\text{Preço} \times 0.06, \min(\text{Preço} \times 0.10, 2.5 \times \text{ATR}_{14}))$$
-* **Pontuação (Score de Confluência):** Base 7.0 + bônus de pânico extremo ($\text{IFR}_2 \le 5.0 \to +1.5$), volume de exaustão ($> 1.2\text{x ADTV} \to +1.0$) e liquidez institucional ($\ge \text{R\$\ 20M} \to +0.5$).
+* **Pontuação (Score de Confluência):** Base 7.0 + bônus de pânico extremo ($\text{IFR}_2 \le 5.0 \to +1.5$), volume de exaustão ($> 1.2\text{x ADTV} \to +1.0$) e liquidez institucional (≥ R\$ 20M → +0.5).
 
 #### B. Seguidor de Tendência — *Momentum* com *Pullback*
 * **Alinhamento Altista:** $\text{Preço} \ge \text{EMA}_9 > \text{EMA}_{21} > \text{SMA}_{200}$ com $\text{EMA}_9$ ascendente.
@@ -225,7 +225,7 @@ Banco de dados relacional SQLite (`portfolio.db`) gerenciado via SQLAlchemy ORM:
 ### 4.2. Apuração Tributária Conforme Legislação (`ledger/taxes.py`)
 * **Preço Médio Ponderado:** Recalculado a cada compra incluindo taxas de corretagem e emolumentos da B3:
   $$\text{PM}_{novo} = \frac{(\text{PM}_{antigo} \times Q_{antiga}) + (\text{Preço}_{compra} \times Q_{compra} + \text{Taxas})}{Q_{antiga} + Q_{compra}}$$
-* **Isenção de R$ 20.000/Mês:** Isenção sobre ganho de capital se o volume total vendido no mês civil for $\le \text{R\$\ 20.000,00}$ (Art. 59 da IN RFB nº 1.585/2015).
+* **Isenção de R\$ 20.000/Mês:** Isenção sobre ganho de capital se o volume total vendido no mês civil for ≤ R\$ 20.000,00 (Art. 59 da IN RFB nº 1.585/2015).
 * **Compensação de Prejuízos:** Abatimento automático de perdas líquidas acumuladas de meses anteriores antes da aplicação da alíquota.
 * **Alíquota e Recolhimento:** 15% sobre o ganho líquido tributável de Swing Trade de ações, deduzindo o IRRF retido na fonte (0,005%), fornecendo o valor exato a pagar no **Código de Receita 6015**.
 
