@@ -30,7 +30,20 @@ ENV/
 .cache_data/
 *.parquet
 portfolio.db
+*.db
+*.db-journal
+*.db-wal
+*.db.bak
+*.bak
+*.sqlite
 *.sqlite3
+
+# Personal Spreadsheets & Local Import Scripts
+*.xlsx
+*.xls
+*.csv
+Investimentos.xlsx
+scripts/import_excel_transactions.py
 
 # Environment & Secrets
 .env

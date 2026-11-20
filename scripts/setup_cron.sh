@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Configura o agendador nativo do macOS (launchd) para rodar o alerta matinal às 09:55 BRT (America/Sao_Paulo - Seg-Sex)
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_FILE="$PLIST_DIR/com.b3pilot.morning.plist"
-SCRIPT_PATH="/Users/ricardoneves/Developer/apps_self_host/b3-acoes-pilot/.venv/bin/b3pilot"
+SCRIPT_PATH="$PROJECT_DIR/.venv/bin/b3pilot"
 
 mkdir -p "$PLIST_DIR"
 
