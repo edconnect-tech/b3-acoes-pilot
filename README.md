@@ -1,6 +1,6 @@
 # B3 Ações Pilot 🚀
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-2563eb?logo=python&logoColor=white)](https://www.python.org/)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-2563eb?logo=python&logoColor=white)](https://www.python.org/)
 [![Licença: BSL 1.1](https://img.shields.io/badge/Licen%C3%A7a-BSL%201.1-0f172a)](LICENSE)
 [![CI Tests](https://github.com/edconnect-tech/b3-acoes-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/edconnect-tech/b3-acoes-pilot/actions/workflows/ci.yml)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EdConnect%20Tecnologia-db2777?logo=githubsponsors)](https://github.com/sponsors/edconnect-tech)
@@ -239,7 +239,7 @@ DEEPSEEK_API_KEY=
 ## 🚀 Instalação e Configuração
 
 ### Requisitos
-* **Python 3.11 ou superior**
+* **Python 3.12 ou superior**
 * **Git**
 * Sistema Operacional: **macOS**, **Linux** ou **Windows 10/11 (PowerShell / WSL)**
 
