@@ -50,3 +50,18 @@ TAX_EXEMPTION_LIMIT_MONTHLY = 20000.00  # Limite de R$ 20.000 em vendas para ise
 TAX_RATE_SWING_TRADE = 0.15             # 15% sobre o ganho líquido tributável
 IRRF_RATE_SALES = 0.00005               # 0,005% dedo-duro sobre alienação
 MIN_DARF_PAYMENT = 10.00                # Valor mínimo para recolhimento de DARF
+
+# Conectores de IA (APIs REST e CLIs com login OAuth como Google agy)
+AI_PROVIDER = os.getenv("AI_PROVIDER", "deterministic").strip().lower()
+AI_MODEL = os.getenv("AI_MODEL", "").strip()
+AI_BASE_URL = os.getenv("AI_BASE_URL", "").strip()
+AI_API_KEY = os.getenv("AI_API_KEY", "").strip()
+AI_TIMEOUT_SECONDS = int(os.getenv("AI_TIMEOUT_SECONDS", "60"))
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()

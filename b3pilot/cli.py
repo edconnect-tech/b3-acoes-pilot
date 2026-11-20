@@ -21,7 +21,12 @@ from b3pilot.core.risk import (
     check_sector_and_cluster_conflict,
 )
 from b3pilot.data.sectors import get_asset_sector_profile
-from b3pilot.core.chat import process_chat_query
+from b3pilot.core.chat import process_chat_query, process_chat_query_with_ai
+from b3pilot.ai.providers import (
+    detect_best_provider,
+    list_providers_status,
+    test_provider_connection,
+)
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe
 from b3pilot.alerts.morning_job import run_morning_routine
@@ -403,14 +408,101 @@ def audit_trava_command(
 def ask_command(
     question: str = typer.Argument(..., help="Pergunta em linguagem natural (ex: 'Posso comprar PETR4?' ou 'Devo vender algo?')"),
     simulated: bool = typer.Option(False, "--simulated", "-s", help="Consultar no contexto da Carteira Simulada"),
+    ai: bool = typer.Option(False, "--ai/--no-ai", help="Sintetizar análise determinística com o conector de IA configurado (ou --provider)"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="Provedor de IA (auto, agy, gemini, openai, anthropic, openrouter, groq, deepseek, ollama, gemini_cli, claude_cli, codex_cli)"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Modelo específico do provedor selecionado"),
 ):
     """Consulta o Assistente Operacional em tempo real sobre compras, vendas e setups da B3."""
     init_db()
     session = get_db_session()
+    use_ai = ai or bool(provider)
+
     with console.status("[bold cyan]Analisando mercado e dados técnicos...[/bold cyan]"):
-        response = process_chat_query(question, session, is_simulated=simulated)
-    console.print(Panel(response, title="Assistente Operacional B3", border_style="cyan"))
+        if use_ai:
+            target_provider = provider or "auto"
+            res = process_chat_query_with_ai(
+                question,
+                session,
+                is_simulated=simulated,
+                provider=target_provider,
+                model=model,
+            )
+            response = res["response"]
+            subtitle = f"Conector: {res['provider']} ({res['model']})"
+            warning = res.get("warning")
+        else:
+            response = process_chat_query(question, session, is_simulated=simulated)
+            subtitle = "Motor: deterministic (python-64bit)"
+            warning = None
+
+    if warning:
+        console.print(f"[yellow]⚠️ {warning}[/yellow]")
+    console.print(Panel(response, title="Assistente Operacional B3", subtitle=subtitle, border_style="cyan"))
     session.close()
+
+
+@app.command(name="ai-status")
+def ai_status_command():
+    """Lista todos os conectores de IA disponíveis (APIs e CLIs com login Google agy/OAuth)."""
+    statuses = list_providers_status()
+    active_best = detect_best_provider()
+
+    table = Table(title="Conectores de IA — B3 Ações Pilot", show_header=True, header_style="bold cyan")
+    table.add_column("ID", style="bold")
+    table.add_column("Provedor")
+    table.add_column("Autenticação")
+    table.add_column("Status")
+    table.add_column("Modelo Padrão")
+    table.add_column("Como Configurar")
+
+    for st_item in statuses:
+        auth_map = {
+            "none": "Nativa (Sem LLM)",
+            "cli_oauth": "Login CLI / OAuth",
+            "api_key": "API Key / URL",
+            "local": "Serviço Local",
+        }
+        status_str = (
+            f"[green]{st_item['status_label']}[/green]"
+            if st_item["ready"]
+            else f"[yellow]{st_item['status_label']}[/yellow]"
+        )
+        model_str = st_item["default_model"] or "Padrão da CLI"
+        table.add_row(
+            st_item["id"],
+            st_item["name"],
+            auth_map.get(st_item["auth_type"], st_item["auth_type"]),
+            status_str,
+            model_str,
+            st_item["login_hint"],
+        )
+
+    console.print()
+    console.print(table)
+    console.print(
+        f"\n[bold]Provedor ativo padrão (`AI_PROVIDER`):[/bold] [cyan]{active_best}[/cyan] "
+        f"[dim](use `b3pilot ask --ai -p agy \"...\"` ou configure no .env)[/dim]\n"
+    )
+
+
+@app.command(name="ai-test")
+def ai_test_command(
+    provider: str = typer.Option("auto", "--provider", "-p", help="ID do provedor a testar (ex: agy, gemini, openai, ollama)"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Modelo opcional para sobrescrever o padrão"),
+):
+    """Testa a conectividade e autenticação do conector de IA informado."""
+    with console.status(f"[bold cyan]Testando conector '{provider}'...[/bold cyan]"):
+        result = test_provider_connection(provider=provider, model=model)
+
+    if result["ok"]:
+        console.print(
+            f"[bold green]✓ {result['provider']} ({result['model']}) pronto:[/bold green] {result['message']}"
+        )
+    else:
+        console.print(
+            f"[bold red]✗ Falha no conector {result['provider']}:[/bold red] {result['message']}"
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command(name="partial-sale")

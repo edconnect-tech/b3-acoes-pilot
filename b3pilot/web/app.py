@@ -9,6 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import time
+from typing import Any, Dict
 
 from b3pilot.ledger.db import init_db, get_db_session, Position, Transaction, MonthlyTaxRecord
 from b3pilot.ledger.portfolio import (
@@ -31,7 +32,12 @@ from b3pilot.core.risk import (
     filter_diversified_signals,
 )
 from b3pilot.data.sectors import get_asset_sector_profile, B3_SECTORS_DATA
-from b3pilot.core.chat import process_chat_query
+from b3pilot.core.chat import process_chat_query, process_chat_query_with_ai
+from b3pilot.ai.providers import (
+    detect_best_provider,
+    list_providers_status,
+    test_provider_connection,
+)
 from b3pilot.data.dividends_feed import scan_upcoming_dividends
 from b3pilot.data.universe import get_universe, SMALL_MID_CAPS, BLUE_CHIPS
 from b3pilot.data.b3_feed import (
@@ -356,7 +362,7 @@ st.sidebar.markdown(
         <div class="brand-avatar">📈</div>
         <div class="brand-info">
             <span class="brand-title">B3 Ações Pilot</span>
-            <span class="brand-badge">Institucional • v0.4.0</span>
+            <span class="brand-badge">Institucional • v0.5.0</span>
         </div>
     </div>
     <div class="sidebar-category-header">Navegação Principal</div>
@@ -629,8 +635,123 @@ elif menu == "💬 Assistente & Chat Operacional":
     st.markdown(
         "Consulte em tempo real se é momento de **comprar**, **vender** ou **aguardar** determinada ação na B3. "
         "A análise cruza automaticamente o Regime do IBOVESPA, indicadores técnicos (IFR2, Médias, ATR, Range 52S) "
-        "e a sua carteira atual."
+        "e a sua carteira atual — com suporte opcional a **APIs de IA e CLIs com login Google (`agy` / `gemini`)**."
     )
+
+    # Configuração do Conector de IA (Sessão + .env)
+    provider_statuses = list_providers_status()
+    provider_map = {item["id"]: item for item in provider_statuses}
+    provider_ids = [item["id"] for item in provider_statuses]
+    default_pid = detect_best_provider()
+    if "ai_selected_provider" not in st.session_state or st.session_state["ai_selected_provider"] not in provider_ids:
+        st.session_state["ai_selected_provider"] = default_pid
+
+    with st.expander("🤖 Conector de IA (APIs & Login Google agy / CLIs)", expanded=False):
+        ai_col1, ai_col2 = st.columns([2, 1])
+        with ai_col1:
+            selected_provider = st.selectbox(
+                "Motor de Resposta / Provedor de IA:",
+                options=provider_ids,
+                index=provider_ids.index(st.session_state["ai_selected_provider"]),
+                format_func=lambda pid: f"{provider_map[pid]['name']} [{provider_map[pid]['status_label']}]",
+                key="ai_provider_select",
+            )
+            st.session_state["ai_selected_provider"] = selected_provider
+
+        sel_meta = provider_map[selected_provider]
+        with ai_col2:
+            model_placeholder = sel_meta.get("default_model") or "Padrão da conta/CLI"
+            ai_model_override = st.text_input(
+                "Modelo (Opcional):",
+                value=st.session_state.get("ai_session_model", ""),
+                placeholder=model_placeholder,
+                key="ai_model_input",
+            ).strip()
+            st.session_state["ai_session_model"] = ai_model_override
+
+        ai_session_key = ""
+        ai_session_base_url = ""
+        auth_type = sel_meta["auth_type"]
+
+        if auth_type == "cli_oauth":
+            if sel_meta["ready"]:
+                st.success(
+                    f"✓ Binário detectado em `{sel_meta['binary_path']}`. "
+                    f"Autenticação via login nativo (sem API Key): {sel_meta['login_hint']}"
+                )
+            else:
+                st.warning(
+                    f"⚠️ Binário CLI não encontrado no PATH. {sel_meta['login_hint']}"
+                )
+        elif auth_type == "api_key":
+            k_col, b_col = st.columns(2)
+            with k_col:
+                env_hint = (
+                    f"Chave ativa via .env ({sel_meta['env_key']}). Deixe em branco para usar a do .env."
+                    if sel_meta["ready"]
+                    else f"Informe apenas para esta sessão ou defina {sel_meta.get('env_key') or 'AI_API_KEY'} no .env."
+                )
+                ai_session_key = st.text_input(
+                    "API Key (Somente Sessão — não salva em disco):",
+                    value=st.session_state.get("ai_session_api_key", ""),
+                    type="password",
+                    help=env_hint,
+                    key="ai_api_key_input",
+                ).strip()
+                st.session_state["ai_session_api_key"] = ai_session_key
+            with b_col:
+                if selected_provider == "openai_compatible":
+                    ai_session_base_url = st.text_input(
+                        "Base URL (Endpoint OpenAI-Compatible):",
+                        value=st.session_state.get("ai_session_base_url", sel_meta.get("base_url") or ""),
+                        placeholder="http://localhost:1234/v1",
+                        key="ai_base_url_input",
+                    ).strip()
+                    st.session_state["ai_session_base_url"] = ai_session_base_url
+                else:
+                    st.caption(f"Status no `.env`: **{sel_meta['status_label']}**")
+        elif auth_type == "local":
+            ai_session_base_url = st.text_input(
+                "URL do Servidor Ollama:",
+                value=st.session_state.get("ai_session_base_url", sel_meta.get("base_url") or "http://localhost:11434"),
+                key="ai_ollama_url_input",
+            ).strip()
+            st.session_state["ai_session_base_url"] = ai_session_base_url
+            if sel_meta["ready"]:
+                st.success(f"✓ Ollama respondendo em `{ai_session_base_url}`.")
+            else:
+                st.info(f"ℹ️ {sel_meta['login_hint']}")
+        else:
+            st.info("✓ Modo determinístico local ativo: zero dependência externa e precisão aritmética 64-bit.")
+
+        if st.button("🔌 Testar Conector", key="btn_test_ai_connector"):
+            with st.spinner(f"Testando {selected_provider}..."):
+                test_res = test_provider_connection(
+                    provider=selected_provider,
+                    model=ai_model_override or None,
+                    api_key=ai_session_key or None,
+                    base_url=ai_session_base_url or None,
+                )
+            if test_res["ok"]:
+                st.success(f"✓ {test_res['provider']} ({test_res['model']}): {test_res['message']}")
+            else:
+                st.error(f"✗ {test_res['message']}")
+
+    active_provider = st.session_state.get("ai_selected_provider", "deterministic")
+    active_model = st.session_state.get("ai_session_model") or None
+    active_api_key = st.session_state.get("ai_session_api_key") or None
+    active_base_url = st.session_state.get("ai_session_base_url") or None
+
+    def _run_chat_turn(user_text: str) -> Dict[str, Any]:
+        return process_chat_query_with_ai(
+            user_text,
+            session,
+            is_simulated=is_sim_mode,
+            provider=active_provider,
+            model=active_model,
+            api_key=active_api_key,
+            base_url=active_base_url,
+        )
 
     # Inicializa histórico de mensagens no session_state
     if "chat_messages" not in st.session_state:
@@ -654,21 +775,39 @@ elif menu == "💬 Assistente & Chat Operacional":
     quick_cols = st.columns(4)
     with quick_cols[0]:
         if st.button("📊 Como está o IBOVESPA?", key="btn_q_ibov", use_container_width=True):
-            st.session_state["chat_messages"].append({"role": "user", "content": "Como está o IBOVESPA hoje?"})
-            ans = process_chat_query("Como está o IBOVESPA hoje?", session, is_simulated=is_sim_mode)
-            st.session_state["chat_messages"].append({"role": "assistant", "content": ans})
+            q_text = "Como está o IBOVESPA hoje?"
+            st.session_state["chat_messages"].append({"role": "user", "content": q_text})
+            res = _run_chat_turn(q_text)
+            st.session_state["chat_messages"].append({
+                "role": "assistant",
+                "content": res["response"],
+                "meta": f"{res['provider']} ({res['model']})",
+                "warning": res.get("warning"),
+            })
             st.rerun()
     with quick_cols[1]:
         if st.button("🛡️ Devo vender algo?", key="btn_q_exits", use_container_width=True):
-            st.session_state["chat_messages"].append({"role": "user", "content": "Devo vender alguma ação da minha carteira?"})
-            ans = process_chat_query("Devo vender alguma ação da minha carteira?", session, is_simulated=is_sim_mode)
-            st.session_state["chat_messages"].append({"role": "assistant", "content": ans})
+            q_text = "Devo vender alguma ação da minha carteira?"
+            st.session_state["chat_messages"].append({"role": "user", "content": q_text})
+            res = _run_chat_turn(q_text)
+            st.session_state["chat_messages"].append({
+                "role": "assistant",
+                "content": res["response"],
+                "meta": f"{res['provider']} ({res['model']})",
+                "warning": res.get("warning"),
+            })
             st.rerun()
     with quick_cols[2]:
         if st.button("🎯 Melhores Compras Agora", key="btn_q_buys", use_container_width=True):
-            st.session_state["chat_messages"].append({"role": "user", "content": "Quais são as melhores oportunidades de compra no radar?"})
-            ans = process_chat_query("Quais são as melhores oportunidades de compra no radar?", session, is_simulated=is_sim_mode)
-            st.session_state["chat_messages"].append({"role": "assistant", "content": ans})
+            q_text = "Quais são as melhores oportunidades de compra no radar?"
+            st.session_state["chat_messages"].append({"role": "user", "content": q_text})
+            res = _run_chat_turn(q_text)
+            st.session_state["chat_messages"].append({
+                "role": "assistant",
+                "content": res["response"],
+                "meta": f"{res['provider']} ({res['model']})",
+                "warning": res.get("warning"),
+            })
             st.rerun()
     with quick_cols[3]:
         if st.button("🗑️ Limpar Chat", key="btn_clear_chat", use_container_width=True):
@@ -680,7 +819,11 @@ elif menu == "💬 Assistente & Chat Operacional":
     # Renderiza mensagens anteriores
     for msg in st.session_state["chat_messages"]:
         with st.chat_message(msg["role"]):
+            if msg.get("warning"):
+                st.warning(msg["warning"])
             st.markdown(msg["content"])
+            if msg.get("meta"):
+                st.caption(f"Motor: {msg['meta']}")
 
     # Input do chat
     if prompt := st.chat_input("Digite sua dúvida (ex: Posso comprar PETR4? ou Analisar VALE3)..."):
@@ -690,9 +833,18 @@ elif menu == "💬 Assistente & Chat Operacional":
 
         with st.chat_message("assistant"):
             with st.spinner("Analisando dados técnicos e regime de mercado..."):
-                response = process_chat_query(prompt, session, is_simulated=is_sim_mode)
-                st.markdown(response)
-        st.session_state["chat_messages"].append({"role": "assistant", "content": response})
+                res = _run_chat_turn(prompt)
+                if res.get("warning"):
+                    st.warning(res["warning"])
+                st.markdown(res["response"])
+                meta_label = f"{res['provider']} ({res['model']})"
+                st.caption(f"Motor: {meta_label}")
+        st.session_state["chat_messages"].append({
+            "role": "assistant",
+            "content": res["response"],
+            "meta": meta_label,
+            "warning": res.get("warning"),
+        })
 
 # ==========================================
 # 3. RADAR DE OPORTUNIDADES & PROVENTOS

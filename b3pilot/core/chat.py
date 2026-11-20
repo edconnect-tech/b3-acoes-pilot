@@ -5,10 +5,17 @@ cruzando Regime de Mercado, Indicadores Técnicos, Setups Quantitativos (IFR2, T
 e o estado atual da custódia do usuário (Real ou Simulada).
 """
 
+import os
 import re
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 import pandas as pd
+
+from b3pilot.ai.providers import (
+    AIConnectorError,
+    complete_with_ai,
+    detect_best_provider,
+)
 
 from b3pilot.ledger.db import Position
 from b3pilot.ledger.portfolio import get_portfolio_summary, simulate_partial_exit
@@ -555,3 +562,109 @@ def process_chat_query(
         f"• *\"Quais são as melhores oportunidades de compra no radar?\"*\n\n"
         f"Digite o código de qualquer ação da B3 para receber uma análise instantânea de compra, venda ou espera."
     )
+
+
+AI_SYSTEM_PROMPT = """Você é o copiloto analítico do B3 Ações Pilot (EdConnect Tecnologia).
+Regras estritas (Zero Trust no LLM):
+1. Responda sempre em português brasileiro, de forma clara, objetiva e profissional.
+2. NUNCA invente cotações, stops, alvos, lotes, dividendos ou impostos/DARF. Use EXCLUSIVAMENTE os números calculados pelo motor determinístico Python fornecido no contexto.
+3. Se o diagnóstico determinístico indicar bloqueio (PANIC), venda obrigatória (STOP LOSS) ou conflito setorial, reforce essa disciplina operacional sem suavizar o risco.
+4. Estruture a resposta com resumo direto da decisão, pontos de atenção (risco/setor/regime) e próximos passos práticos.
+5. Encerre com uma nota breve de que a análise tem caráter estritamente analítico e educacional (Resolução CVM nº 20)."""
+
+
+def build_portfolio_ai_context(session: Session, is_simulated: bool = False) -> str:
+    """Gera um resumo seguro e compacto do regime de mercado e da custódia atual para contextualizar a IA."""
+    env_label = "Simulada (Paper Trading)" if is_simulated else "Real"
+    try:
+        regime = analyze_market_regime()
+        regime_line = (
+            f"Regime IBOVESPA: {regime.get('name', '-')} ({regime.get('status', '-')}) | "
+            f"Multiplicador de alocação: {regime.get('allocation_multiplier', 1.0) * 100:.0f}%"
+        )
+    except Exception:
+        regime_line = "Regime IBOVESPA: indisponível no momento"
+
+    try:
+        summary = get_portfolio_summary(session, is_simulated=is_simulated)
+        positions = summary.get("positions", [])
+        if not positions:
+            custody_line = f"Custódia {env_label}: vazia (0 posições abertas)."
+        else:
+            tickers_str = ", ".join(
+                f"{p['ticker']} ({p['quantity']}x, PM R$ {p['average_price']:.2f}, PnL {p['unrealized_pnl_pct']:+.2f}%)"
+                for p in positions[:10]
+            )
+            sec_audit = analyze_portfolio_sector_distribution(
+                positions,
+                total_capital=summary.get("current_market_value", 0.0),
+            )
+            custody_line = (
+                f"Custódia {env_label}: {len(positions)} posições | "
+                f"PnL não realizado: R$ {summary.get('total_unrealized_pnl', 0.0):+,.2f} "
+                f"({summary.get('total_unrealized_pnl_pct', 0.0):+.2f}%) | "
+                f"Score Diversificação: {sec_audit.get('diversification_score', 100):.0f}/100 | "
+                f"Ativos: {tickers_str}"
+            )
+    except Exception:
+        custody_line = f"Custódia {env_label}: sem posições carregadas."
+
+    return f"{regime_line}\n{custody_line}"
+
+
+def process_chat_query_with_ai(
+    user_message: str,
+    session: Session,
+    is_simulated: bool = False,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Combina o motor determinístico Python (obrigatório) com síntese opcional de IA multi-provedor."""
+    deterministic_reply = process_chat_query(user_message, session, is_simulated=is_simulated)
+
+    raw_provider = (provider or os.getenv("AI_PROVIDER", "deterministic")).strip().lower()
+    resolved_provider = detect_best_provider() if raw_provider == "auto" else raw_provider
+
+    if not resolved_provider or resolved_provider == "deterministic":
+        return {
+            "response": deterministic_reply,
+            "provider": "deterministic",
+            "model": "python-64bit",
+            "used_ai": False,
+            "warning": None,
+        }
+
+    portfolio_context = build_portfolio_ai_context(session, is_simulated=is_simulated)
+    grounded_prompt = (
+        f"Pergunta do investidor:\n{user_message.strip()}\n\n"
+        f"Contexto atual do mercado e da carteira:\n{portfolio_context}\n\n"
+        f"Relatório determinístico calculado em Python (fonte da verdade numérica):\n"
+        f"{deterministic_reply}"
+    )
+
+    try:
+        ai_res = complete_with_ai(
+            provider=resolved_provider,
+            system_prompt=AI_SYSTEM_PROMPT,
+            user_prompt=grounded_prompt,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+        )
+        return {
+            "response": ai_res["content"],
+            "provider": ai_res["provider"],
+            "model": ai_res["model"],
+            "used_ai": True,
+            "warning": None,
+        }
+    except AIConnectorError as exc:
+        return {
+            "response": deterministic_reply,
+            "provider": resolved_provider,
+            "model": model or "-",
+            "used_ai": False,
+            "warning": f"Fallback para motor determinístico local: {exc}",
+        }
