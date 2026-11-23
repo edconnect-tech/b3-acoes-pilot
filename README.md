@@ -43,8 +43,8 @@ b3-acoes-pilot/
 │   ├── web/                    # Interface visual Streamlit (Modo Claro / Clean)
 │   │   └── app.py              # Dashboard, chat com IA, radar, gráficos e gestão fiscal
 │   └── cli.py                  # Interface de Linha de Comando (Typer + Rich)
-├── scripts/                    # Automação de cron/launchd e instalação de Skills
-├── tests/                      # Suíte de 50 testes unitários automatizados (pytest)
+├── scripts/                    # Automação de cron/launchd, skills e seed Paper Trading
+├── tests/                      # Suíte de 53 testes unitários automatizados (pytest)
 └── portfolio.db                # Banco SQLite local persistente (ignorado pelo Git)
 ```
 
@@ -287,6 +287,11 @@ pytest -v
 b3pilot web
 ```
 
+> **💡 Dica para testar com dados fictícios (Paper Trading):** antes de cadastrar sua carteira real ou para capturar prints seguros, popule apenas o **Laboratório Simulado** (`is_simulated=True`) sem tocar em dados reais ou tributos:
+> ```bash
+> python scripts/seed_demo_portfolio.py --reset
+> ```
+
 ---
 
 ## 📲 Como Configurar Mensagens e Alertas no Telegram
@@ -397,7 +402,7 @@ Instale a skill automaticamente no seu ambiente local:
 
 ## 🧪 Testes Automatizados
 
-O sistema conta com suíte de **50 testes unitários automatizados** garantindo a integridade dos cálculos matemáticos, regras tributárias, blindagem setorial e conectores de IA:
+O sistema conta com suíte de **53 testes unitários automatizados** garantindo a integridade dos cálculos matemáticos, regras tributárias, blindagem setorial, conectores de IA e isolamento do modo simulado:
 
 ```bash
 pytest -v
@@ -405,6 +410,7 @@ pytest -v
 
 Cobertura dos testes:
 * `tests/test_ai_connectors.py`: Validação de URLs Zero Trust, proteção contra vazamento de segredos, prioridade de detecção, flags `shell=False` para CLIs (`agy`, `gemini`, `claude`, `codex`), headers REST (`x-goog-api-key` no Gemini, Anthropic, OpenAI/OpenRouter/Groq/DeepSeek, Ollama) e fallback determinístico.
+* `tests/test_demo_seed.py`: Seed da carteira fictícia (*Paper Trading*) em 5 setores/clusters distintos, idempotência e proteção Zero Trust contra alteração de custódia real ou registros fiscais.
 * `tests/test_sector_correlation.py`: Mapeamento setorial B3, correlação cruzada (`BBAS3` + Agronegócio), Score de Diversificação e filtro anti-cluster.
 * `tests/test_chat.py`: Motor conversacional, extração de tickers B3, decisões pré-trade e simulação de realização parcial.
 * `tests/test_scale_out.py`: Realização parcial (50%), cálculo de lucro garantido no pior caso e preservação do Preço Médio.
